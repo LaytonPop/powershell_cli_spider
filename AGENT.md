@@ -1,6 +1,6 @@
 # AGENT.md
 
-本文件面向后续维护这个仓库的 AI Agent / 协作者，目标是让人快速理解这个工具当前的真实状态，并在修改时保持行为一致。
+本文件面向后续维护这个仓库的 AI Agent / 协作者，目标是让人快速理解这个工具当前的真实状态，并在修改时保持行为一致。注意：必须符合法律要求，不能侵犯他人的权益，这个是要全局注意的。
 
 ## 项目目标
 
@@ -88,7 +88,12 @@
 
 ## 输出路径约定
 
-Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
+Python 主程序现在支持两种输出模式：
+
+- 默认知识库模式：使用 `-df`
+- 直接路径模式：使用 `-f`
+
+默认知识库模式通过 `BASES` 和 `ALIASES` 决定输出目录。
 
 当前 `BASES` 只有一个预设：
 
@@ -102,9 +107,16 @@ Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
 
 规则：
 
-- `-f A` 会解析成 `001-Current_Projects`
-- `-f B` 会解析成 `002-raw_resource`
-- `-f C` 会解析成 `003-wiki_schema`
+- `-df A` 会解析成 `001-Current_Projects`
+- `-df B` 会解析成 `002-raw_resource`
+- `-df C` 会解析成 `003-wiki_schema`
+- `-df A -df mathcs` 会输出到 `default\001-Current_Projects\mathcs`
+
+直接路径模式下：
+
+- `-f` 接收完整路径
+- 不做 alias 展开
+- 不拼接默认知识库根目录
 
 最终文章输出结构如下：
 
@@ -129,12 +141,13 @@ Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
 1. 解析 CLI 参数
 2. 根据 URL 在 `spider_core.scrapers` 中找到匹配的平台爬虫
 3. 请求文章页面，失败时最多重试 3 次，并采用指数退避
-4. 提取标题、正文 HTML、发布时间、来源 URL
+4. 根据 `-df` 或 `-f` 解析输出目录
 5. 为该文章创建独立目录
-6. 下载正文中的图片到 `images/`
-7. 将正文内图片链接改写成相对本地路径
-8. 生成 HTML 或 Markdown 文件
-9. 将结果写入知识库目录
+6. 提取标题、正文 HTML、发布时间、来源 URL
+7. 下载正文中的图片到 `images/`
+8. 将正文内图片链接改写成相对本地路径
+9. 生成 HTML 或 Markdown 文件
+10. 将结果写入目标目录
 
 ## 输出格式约定
 
@@ -193,13 +206,15 @@ Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
 
 - 把位置参数直接当作 URL
 - 将 `-Format` 映射为 Python 的 `-o`
-- 将多个 `-Folder` 映射为多个 `-f`
+- 将多个 `-DefaultFolder` 映射为多个 `-df`
+- 将 `-FullPath` 映射为 Python 的 `-f`
 - 对批处理文件逐行调用 Python 脚本
 
 注意：
 
 - Python 主程序本身没有批处理模式
 - 批处理能力只存在于 `spider.ps1`
+- `-df` 与 `-f` 是互斥的，不能同时使用
 - 若修改 Python CLI 参数名，必须同步更新 `spider.ps1`
 
 ## 常用命令
@@ -207,11 +222,15 @@ Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
 ### 直接调用 Python
 
 ```powershell
-python .\spider.py default -u "https://mp.weixin.qq.com/s/xxx" -f A -f IoT -o md
+python .\spider.py -u "https://mp.weixin.qq.com/s/xxx" -df A -df IoT -o md
 ```
 
 ```powershell
-python .\spider.py --dry-run -f A -f IoT -o md
+python .\spider.py --dry-run -df A -df IoT -o md
+```
+
+```powershell
+python .\spider.py -u "https://zhuanlan.zhihu.com/p/xxxx" -f "F:\workspace3\wen\temp\articles" -o html
 ```
 
 ```powershell
@@ -230,11 +249,15 @@ python .\spider.py --list-aliases
 然后执行：
 
 ```powershell
-spider "https://mp.weixin.qq.com/s/xxx" -o md -f A -f IoT
+spider "https://mp.weixin.qq.com/s/xxx" -o md -df A -df IoT
 ```
 
 ```powershell
-spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -f B
+spider -u "https://zhuanlan.zhihu.com/p/xxxx" -o html -f "F:\workspace3\wen\temp\articles"
+```
+
+```powershell
+spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -df B
 ```
 
 ## 新增站点时的约定
@@ -271,7 +294,8 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -f B
 6. 如果图片链接不是标准 `src`，补 `spider_core/media.py`
 7. 跑最小验证：
    - `python .\spider.py --help`
-   - `python .\spider.py --dry-run -f A -o md`
+   - `python .\spider.py --dry-run -df A -o md`
+   - `python .\spider.py --dry-run -f "F:\workspace3\wen\temp\articles" -o md`
    - 真实 URL 抓取验证
 8. 更新 `AGENT.md` 与 `CLUADE.md` 中的支持站点说明
 
@@ -291,6 +315,8 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -f B
    - `BASES`
    - `ALIASES`
    - `resolve_output_dir()`
+   - `resolve_default_output_dir()`
+   - `normalize_output_path()`
 2. `spider_core/renderers.py`
    - 文件名清洗逻辑
 3. `spider_core/service.py`
@@ -341,6 +367,7 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -f B
 - CLI 参数发生变化
 - base path / alias 规则发生变化
 - 输出目录结构发生变化
+- `-df` / `-f` 模式语义发生变化
 - PowerShell 包装层调用方式发生变化
 - Python 模块结构发生变化
 - Python 依赖或环境假设发生变化

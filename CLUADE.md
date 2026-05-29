@@ -39,10 +39,11 @@
 - 输入一个 URL 后，最终应在知识库中生成“文章目录 + 主文件 + images 子目录”
 - Markdown 输出必须继续保留 frontmatter
 - 图片链接必须继续改写为本地相对路径
-- `-f` 目录参数必须继续支持别名展开：
+- `-df` 目录参数必须继续支持别名展开：
   - `A -> 001-Current_Projects`
   - `B -> 002-raw_resource`
   - `C -> 003-wiki_schema`
+- `-f` 现在表示直接完整输出路径，不再表示默认库下的目录段
 - PowerShell 入口的“位置参数就是 URL”行为不要随意破坏
 - PowerShell 入口的批量抓取功能不要随意破坏
 
@@ -67,7 +68,8 @@
 
 - 先检查 `spider_core/config.py` 中的 `BASES`
 - 再检查 `ALIASES`
-- 最后检查 `resolve_output_dir()`
+- 再检查 `resolve_default_output_dir()` 与 `normalize_output_path()`
+- 最后检查 `spider_core/cli.py` 中 `-df` / `-f` 的互斥逻辑
 - 若目录结构变化，务必同步更新 `spider.ps1` 的帮助文本和两个文档
 
 ### 调整命令行参数
@@ -76,7 +78,8 @@
 - 然后检查 `spider.py` 与 `spider.ps1` 是否还在正确传参
 - 特别关注：
   - `-u/--url`
-  - `-f/--folder`
+  - `-df/--default-folder`
+  - `-f/--full-path`
   - `-o/--format`
   - `--dry-run`
 
@@ -88,7 +91,8 @@
 python .\spider.py --help
 python .\spider.py --list-bases
 python .\spider.py --list-aliases
-python .\spider.py --dry-run -f A -f Demo -o md
+python .\spider.py --dry-run -df A -df Demo -o md
+python .\spider.py --dry-run -f "F:\workspace3\wen\temp\articles" -o md
 ```
 
 如果改了 `spider.ps1`，再补一次：

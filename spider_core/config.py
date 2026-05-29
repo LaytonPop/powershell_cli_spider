@@ -48,3 +48,16 @@ def resolve_output_dir(base_key: str, folders: list[str]) -> str:
     for folder in folders:
         path = os.path.join(path, resolve_alias(folder))
     return path
+
+
+def resolve_default_output_dir(folders: list[str]) -> str:
+    """Resolve folders under the default knowledge-base root."""
+    return resolve_output_dir("default", folders)
+
+
+def normalize_output_path(path: str) -> str:
+    """Normalize a direct output path without applying alias resolution."""
+    normalized = path.strip()
+    if not normalized:
+        raise ValueError("直接输出路径不能为空")
+    return os.path.normpath(os.path.abspath(os.path.expanduser(normalized)))
