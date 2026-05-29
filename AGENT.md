@@ -27,7 +27,7 @@
 - `spider.py` 使用了 Python 3.10+ 语法：
   - `list[str]`
   - `str | None`
-- 当前未提供 `requirements.txt` 或锁文件，代码直接依赖这些第三方包：
+- 当前已有 `requirements.txt`，代码依赖这些第三方包：
   - `requests`
   - `beautifulsoup4`
   - `html2text`
@@ -189,9 +189,10 @@ Python 主程序现在支持两种输出模式：
 
 当前限制：
 
-- 文章页请求使用了重试逻辑
-- 图片请求没有复用 `retry_request()`，失败会直接跳过
-- 只根据 URL 后缀或 `Content-Type` 推断少量常见图片格式
+- 图片下载已复用 `retry_request()`（3 次指数退避），与文章页请求一致
+- 图片下载完全串行，多图文章效率低（可改用 `ThreadPoolExecutor` 并发下载）
+- 图片请求未复用 HTTP Session，同域名下 TLS 握手重复开销
+- 只根据 URL 后缀或 `Content-Type` 推断少量常见图片格式；无后缀且无 Content-Type 时默认回退 `.jpg`，对 PNG/GIF 可能误判扩展名
 
 ## PowerShell 包装层
 
@@ -348,16 +349,39 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -df B
   - 本地单条抓取验证
 - 当前没有去重机制，同一篇文章重复抓取会复用同目录并覆盖同名主文件
 - 当前没有日志分级，报错主要依赖 stderr 输出
+- `sanitize_filename()` 空标题回退已改为 `article_` + MD5 前 8 位，避免碰撞
+- 爬取失败时 `scrape()` 返回 `None`，调用方无法区分"网络失败"、"解析失败"、"不支持该 URL"三种情况
+
+## 已知待优化项
+
+按优先级排列，供后续迭代参考。
+
+### 可靠性（高优先级）
+
+- **图片扩展名回退优化**：`_guess_extension()` 在无后缀且无 Content-Type 时默认 `.jpg`，对 PNG/GIF 可能误判
+
+### 效率（中优先级）
+
+- **图片并发下载**：当前 `for` 循环串行下载，改用 `ThreadPoolExecutor` 可显著加速多图文章
+- **HTTP Session 复用**：`http.py` 和 `media.py` 各自创建独立连接，共享 `requests.Session` 可减少 TLS 握手开销
+- **知乎 `match()` 收紧或报错细化**：问题页 URL 匹配成功但解析必然失败，应在匹配阶段或失败提示中区分页面类型
+- **PowerShell 参数解析简化**：`ConvertTo-SpiderArguments` 手写 ~100 行 switch，可用 `Param()` 块精简
+
+### 工程化（低优先级）
+
+- **结构化日志**：当前全部用 `print(..., file=sys.stderr)`，无级别、无时间戳；引入 `logging` 模块成本极低
+- **爬取失败结构化错误**：`scrape()` 返回 `None` 无法区分失败原因，可改为自定义异常或 `Result[T, E]` 模式
+- **批量抓取失败汇总**：`spider.ps1` 的 `-BatchFile` 结束后无"成功 N / 失败 M"统计
+- **Markdown 后处理**：`html2text` 输出偶有多余空行或断裂表格，可加一层清理
 
 ## 建议的后续演进方向
 
 - 为 `spider_core` 提供稳定的程序化 API，供 MCP 或桌面 agent 直接调用
-- 补 `requirements.txt` 或 `pyproject.toml`
 - 把硬编码路径迁移到配置文件或环境变量
 - 为各平台提取逻辑补最小回归样例
 - 为批量抓取增加失败汇总
 - 为知乎问题页补单独解析逻辑
-- 为图片下载复用重试策略
+- 图片下载并发化 (`ThreadPoolExecutor`)
 
 ## 文档同步要求
 

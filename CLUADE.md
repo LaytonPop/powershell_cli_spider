@@ -33,6 +33,7 @@
   - `zhuanlan.zhihu.com`
   - `www.zhihu.com/question`
 - 批量抓取只在 `spider.ps1` 中实现
+- 已有 `requirements.txt`（`requests`、`beautifulsoup4`、`html2text`）
 
 ## 你在修改时要守住的行为
 
@@ -49,11 +50,11 @@
 
 ## 高风险区域
 
-- `ZhihuScraper.match()` 放得比解析逻辑更宽，可能匹配到当前 DOM 不兼容的知乎问题页
+- `ZhihuScraper.match()` 放得比解析逻辑更宽，可能匹配到当前 DOM 不兼容的知乎问题页；发布时间依赖专栏页 DOM 选择器，DOM 变化时可能提取失败
 - `spider.ps1` 中的 Python 路径和脚本路径是硬编码的，改动会直接影响用户日常调用
 - `spider.py` 只是入口，新增业务逻辑时不要再把实现堆回单文件
 - 没有测试框架，改 selector 或输出格式时很容易产生静默回归
-- 图片下载不会重试，网络稍差时可能导致正文正常、图片缺失
+- 爬取失败只返回 `None`，调用方无法区分"网络失败"、"解析失败"、"不支持该 URL"
 
 ## 常见任务怎么做
 

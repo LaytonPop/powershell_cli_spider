@@ -8,6 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .config import HEADERS
+from .http import retry_request
 
 SUPPORTED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
 CONTENT_TYPE_EXTENSIONS = {
@@ -56,10 +57,8 @@ def download_and_rewrite_images(html: str, base_url: str, img_dir: str) -> str:
         if abs_url is None:
             continue
 
-        try:
-            response = requests.get(abs_url, headers=HEADERS, timeout=15)
-            response.raise_for_status()
-        except requests.exceptions.RequestException:
+        response = retry_request(abs_url)
+        if response is None:
             continue
 
         filename = hashlib.md5(abs_url.encode()).hexdigest() + _guess_extension(abs_url, response)

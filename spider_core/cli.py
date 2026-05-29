@@ -5,6 +5,7 @@ import os
 import sys
 
 from .config import ALIASES, BASES, normalize_output_path, resolve_default_output_dir
+from .scrapers import find_scraper
 from .service import save_article
 
 
@@ -71,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Output dir: {output_dir}")
         if args.url:
             print(f"URL:        {args.url}")
+            scraper = find_scraper(args.url)
+            scraper_name = scraper.__class__.__name__.replace("Scraper", "") if scraper else "不支持"
+            print(f"Scraper:    {scraper_name}")
         print(f"Format:     {args.format}")
         return 0
 

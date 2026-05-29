@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime
 
@@ -11,7 +12,9 @@ from .models import ScrapedArticle
 def sanitize_filename(title: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]', "", title).strip()
     name = re.sub(r"\s+", "_", name)
-    return name[:100] or "article"
+    if not name:
+        name = f"article_{hashlib.md5(title.encode()).hexdigest()[:8]}"
+    return name[:100]
 
 
 def build_html_doc(title: str, html_content: str, publish_time: str, source_url: str) -> str:

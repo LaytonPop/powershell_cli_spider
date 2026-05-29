@@ -28,12 +28,21 @@ class ZhihuScraper(AbstractScraper):
             print("未找到知乎文章内容区域。", file=sys.stderr)
             return None
 
+        publish_time = ""
+        time_tag = soup.find("div", class_="ContentItem-time")
+        if time_tag:
+            publish_time = time_tag.get_text(strip=True)
+        if not publish_time:
+            meta_time = soup.find("meta", {"itemprop": "datePublished"})
+            if meta_time and meta_time.get("content"):
+                publish_time = meta_time["content"]
+
         for tag in content_div(["script", "style", "noscript"]):
             tag.decompose()
 
         return ScrapedArticle(
             title=title,
             html_content=str(content_div),
-            publish_time="",
+            publish_time=publish_time,
             source_url=url,
         )
