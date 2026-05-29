@@ -11,17 +11,18 @@
 - 生成适合归档的 `html` 或 `md` 文件
 - 按知识库目录结构存放到固定 base path 下
 
-当前仓库非常精简，核心只有两个入口文件：
+当前仓库的入口仍然很精简，但 Python 核心已经拆成模块：
 
-- `spider.py`：Python 主程序，负责 CLI、站点识别、正文提取、图片下载、文档输出
+- `spider.py`：Python 薄入口，只负责调用 CLI
 - `spider.ps1`：PowerShell 包装函数，负责更顺手的终端调用和批量抓取
+- `spider_core/`：Python 核心模块，负责配置、抓取器、图片处理、渲染、保存流程、CLI
 
 ## 当前运行假设
 
 - 运行环境是 Windows + PowerShell
 - `spider.ps1` 假定存在固定的 conda Python：
   - `C:\Users\morganWen\.conda\envs\spider\python.exe`
-- `spider.ps1` 假定脚本固定放在：
+- `spider.ps1` 假定脚本入口固定放在：
   - `F:\workspace3\cmd_utils\spider\spider.py`
 - `spider.py` 使用了 Python 3.10+ 语法：
   - `list[str]`
@@ -32,6 +33,45 @@
   - `html2text`
 
 如果要做环境整理，优先补齐依赖清单与路径配置化，而不是继续扩大硬编码路径。
+
+## 模块结构
+
+当前推荐从下面这些文件建立上下文：
+
+- `spider.py`
+- `spider.ps1`
+- `spider_core/cli.py`
+- `spider_core/service.py`
+- `spider_core/config.py`
+- `spider_core/scrapers/`
+
+模块职责如下：
+
+- `spider_core/config.py`
+  - 基础配置
+  - `BASES`
+  - `ALIASES`
+  - 输出目录解析
+- `spider_core/http.py`
+  - 页面抓取重试逻辑
+- `spider_core/models.py`
+  - `ScrapedArticle` 数据结构
+- `spider_core/scrapers/`
+  - 平台识别与正文提取
+- `spider_core/media.py`
+  - 图片下载与正文图片链接改写
+- `spider_core/renderers.py`
+  - HTML / Markdown 生成
+- `spider_core/service.py`
+  - 文章保存主流程
+- `spider_core/cli.py`
+  - CLI 参数与命令行行为
+
+这套拆分的目标是：
+
+- 保留现有 CLI 和 PowerShell 工作流
+- 让核心逻辑可以被未来的 MCP、桌面 agent、RAG 管线复用
+- 让新增站点和调整输出结构时只改对应模块
 
 ## 当前支持的平台
 
@@ -84,10 +124,10 @@ Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
 
 ## 主流程
 
-`spider.py` 当前工作流如下：
+当前 Python 主流程如下：
 
 1. 解析 CLI 参数
-2. 根据 URL 在 `SCRAPERS` 中找到匹配的平台爬虫
+2. 根据 URL 在 `spider_core.scrapers` 中找到匹配的平台爬虫
 3. 请求文章页面，失败时最多重试 3 次，并采用指数退避
 4. 提取标题、正文 HTML、发布时间、来源 URL
 5. 为该文章创建独立目录
@@ -122,7 +162,7 @@ Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
 
 ## 图片处理规则
 
-图片下载由 `_download_and_rewrite()` 完成，当前行为很重要：
+图片下载由 `spider_core/media.py` 中的 `download_and_rewrite_images()` 完成，当前行为很重要：
 
 - 会自动创建 `images/` 目录
 - 会处理微信公众号常见懒加载属性：
@@ -167,11 +207,11 @@ Python 主程序通过 `BASES` 和 `ALIASES` 决定输出目录。
 ### 直接调用 Python
 
 ```powershell
-python .\spider.py default -u "https://mp.weixin.qq.com/s/xxx" -f A-Current_Projects -f IoT -o md
+python .\spider.py default -u "https://mp.weixin.qq.com/s/xxx" -f A -f IoT -o md
 ```
 
 ```powershell
-python .\spider.py --dry-run -f A-Current_Projects -f IoT -o md
+python .\spider.py --dry-run -f A -f IoT -o md
 ```
 
 ```powershell
@@ -190,34 +230,91 @@ python .\spider.py --list-aliases
 然后执行：
 
 ```powershell
-spider "https://mp.weixin.qq.com/s/xxx" -Format md -Folder A-Current_Projects -Folder IoT
+spider "https://mp.weixin.qq.com/s/xxx" -o md -f A -f IoT
 ```
 
 ```powershell
-spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -Format html -Folder B-Reading
+spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -f B
 ```
 
 ## 新增站点时的约定
 
 新增平台时，保持最小改动路径：
 
-1. 继承 `AbstractScraper`
-2. 实现：
+1. 在 `spider_core/scrapers/` 下新增一个文件，或在合适文件中新增一个抓取器类
+2. 继承 `AbstractScraper`
+3. 实现：
    - `match(url)`
    - `scrape(url)`
-3. `scrape()` 返回统一结构：
-   - `title`
-   - `html_content`
-   - `publish_time`
-   - `source_url`
-4. 将实例加入 `SCRAPERS`
-5. 如该站图片使用特殊懒加载属性，在 `_download_and_rewrite()` 中补充
-6. 同步更新本文件和 `CLUADE.md`
+4. `scrape()` 返回统一结构：
+   - `ScrapedArticle`
+   - 或与其字段完全一致的数据
+5. 将实例加入 `spider_core/scrapers/__init__.py` 中的 `SCRAPERS`
+6. 如该站图片使用特殊懒加载属性，在 `spider_core/media.py` 中补充
+7. 若该站点需要特殊清洗逻辑，优先收敛到该站抓取器内部，不要把站点分支散落到 CLI 或保存层
+8. 同步更新本文件和 `CLUADE.md`
+
+## 如何新增站点
+
+推荐步骤：
+
+1. 先确认是否真的属于“文章页”抓取，而不是列表页、搜索页或登录态页面
+2. 在 `spider_core/scrapers/` 新建抓取器，例如 `new_site.py`
+3. 在该文件中实现：
+   - URL 匹配
+   - 页面请求后的 DOM 解析
+   - 标题提取
+   - 正文提取
+   - 发布时间提取
+4. 返回 `ScrapedArticle`
+5. 在 `spider_core/scrapers/__init__.py` 注册实例
+6. 如果图片链接不是标准 `src`，补 `spider_core/media.py`
+7. 跑最小验证：
+   - `python .\spider.py --help`
+   - `python .\spider.py --dry-run -f A -o md`
+   - 真实 URL 抓取验证
+8. 更新 `AGENT.md` 与 `CLUADE.md` 中的支持站点说明
+
+新增站点时的注意事项：
+
+- 不要为了某一个站点去改全局输出结构
+- 不要随意改 CLI 参数名
+- 优先把站点差异封装在 scraper 内部
+- 如果站点依赖登录、cookie 或 JS 渲染，要在文档里明确说明
+- 若新站点引入额外依赖，必须同步更新依赖说明
+
+## 如何调整输出目录结构
+
+目录结构调整时，优先检查这些位置：
+
+1. `spider_core/config.py`
+   - `BASES`
+   - `ALIASES`
+   - `resolve_output_dir()`
+2. `spider_core/renderers.py`
+   - 文件名清洗逻辑
+3. `spider_core/service.py`
+   - 文章目录
+   - `images/` 子目录
+   - 主文件扩展名
+4. `spider.ps1`
+   - 帮助文本中的示例和别名说明
+5. `AGENT.md` / `CLUADE.md`
+   - 输出路径约定
+   - 常用命令
+
+调整时的原则：
+
+- 优先保持“文章独立目录 + 主文件 + images 子目录”不变
+- 若必须变更目录层级，要明确旧路径是否兼容
+- 不要只改 Python，不改 PowerShell 帮助文本
+- 不要只改代码，不改文档
 
 ## 维护注意事项
 
 - 不要默默改动 `BASES`、`ALIASES`、Python 路径或脚本路径；这些都是用户工作流的一部分
 - 如果要把硬编码路径改成配置文件，需要同时处理 Python 与 PowerShell 两层入口
+- `spider.py` 现在是薄入口，业务逻辑优先放在 `spider_core/`，不要重新堆回单文件
 - DOM 选择器很脆弱，站点一改版就可能失效
 - 当前没有自动测试，任何改动后至少要做一次：
   - `--dry-run`
@@ -228,6 +325,7 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -Format html -Folder B-Readi
 
 ## 建议的后续演进方向
 
+- 为 `spider_core` 提供稳定的程序化 API，供 MCP 或桌面 agent 直接调用
 - 补 `requirements.txt` 或 `pyproject.toml`
 - 把硬编码路径迁移到配置文件或环境变量
 - 为各平台提取逻辑补最小回归样例
@@ -244,13 +342,5 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -Format html -Folder B-Readi
 - base path / alias 规则发生变化
 - 输出目录结构发生变化
 - PowerShell 包装层调用方式发生变化
+- Python 模块结构发生变化
 - Python 依赖或环境假设发生变化
-
-
-## 修改意见
-- 新增站点时，保持最小改动路径，不要随意修改输出结构或 CLI 参数
-- 由于 `spider.ps1` 中的别名展开逻辑，新增站点时需要同步更新 `CLUADE.md` 中的别名展开规则
-- 由于项目会变得很复杂所以这次的修改可以考虑把单一的文件拆成多个文件，每个文件负责不同的功能，不过需要有良好的代码结构和注释，方便后续维护，可以考虑成为独立的模块，为以后agent项目(拥有mcp、rag模块)提供爬虫功能，桌面agent调用mcp去使用
-- 例如，`spider.py` 可负责处理 Python 逻辑，`spider.ps1` 可负责处理 PowerShell 逻辑
-- 需要在 `AGENT.md` 中增加一个章节，介绍如何新增站点的步骤和注意事项，确保后续维护者能够按照规范添加新的爬虫逻辑
-- 需要在 `AGENT.md` 中增加一个章节，介绍如何调整输出目录结构，确保后续维护者能够按照规范调整输出目录结构
