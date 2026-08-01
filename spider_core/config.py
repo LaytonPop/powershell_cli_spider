@@ -38,13 +38,21 @@ def resolve_alias(segment: str) -> str:
     return ALIASES.get(alias_key, normalized)
 
 
-def resolve_output_dir(base_key: str, folders: list[str]) -> str:
-    """Resolve the configured base path and all folder segments."""
+def _get_base(base_key: str) -> str:
+    """Return a base path, preferring the SPIDER_BASE env var for 'default'."""
+    if base_key == "default":
+        env_override = os.environ.get("SPIDER_BASE", "").strip()
+        if env_override:
+            return os.path.normpath(os.path.abspath(os.path.expanduser(env_override)))
     if base_key not in BASES:
         known = ", ".join(BASES)
         raise ValueError(f"未知的 base 预设 '{base_key}'，可用: {known}")
+    return BASES[base_key]
 
-    path = BASES[base_key]
+
+def resolve_output_dir(base_key: str, folders: list[str]) -> str:
+    """Resolve the configured base path and all folder segments."""
+    path = _get_base(base_key)
     for folder in folders:
         path = os.path.join(path, resolve_alias(folder))
     return path
