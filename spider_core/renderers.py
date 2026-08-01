@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import html
+import json
 import re
 from datetime import datetime
 
@@ -12,21 +14,24 @@ from .models import ScrapedArticle
 def sanitize_filename(title: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]', "", title).strip()
     name = re.sub(r"\s+", "_", name)
-    if not name:
+    # Reject path traversal / hidden-file edge cases (".", "..", ".hidden", "…")
+    if not name or name.startswith(".") or name in {".", ".."} or re.fullmatch(r"\.+", name):
         name = f"article_{hashlib.md5(title.encode()).hexdigest()[:8]}"
     return name[:100]
 
 
 def build_html_doc(title: str, html_content: str, publish_time: str, source_url: str) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    meta_time = f"<p>发布时间: {publish_time}</p>" if publish_time else ""
+    meta_time = f"<p>发布时间: {html.escape(publish_time)}</p>" if publish_time else ""
+    safe_title = html.escape(title, quote=True)
+    safe_url = html.escape(source_url, quote=True)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="{title}">
-    <title>{title}</title>
+    <meta name="description" content="{safe_title}">
+    <title>{safe_title}</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 20px; color: #333; background: #f9f9f9; }}
         .article-header {{ border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; }}
@@ -43,10 +48,10 @@ def build_html_doc(title: str, html_content: str, publish_time: str, source_url:
 </head>
 <body>
     <div class="article-header">
-        <h1 class="article-title">{title}</h1>
+        <h1 class="article-title">{safe_title}</h1>
         <div class="article-meta">
             {meta_time}
-            <p>来源: <a href="{source_url}" target="_blank">{source_url[:50]}...</a></p>
+            <p>来源: <a href="{safe_url}" target="_blank">{safe_url[:50]}...</a></p>
             <p>抓取时间: {now}</p>
         </div>
     </div>
@@ -71,10 +76,10 @@ def build_markdown_doc(title: str, html_content: str, publish_time: str, source_
     md_body = converter.handle(html_content).strip()
 
     lines = ["---"]
-    lines.append(f'title: "{title}"')
+    lines.append(f"title: {json.dumps(title, ensure_ascii=False)}")
     if publish_time:
-        lines.append(f"date: {publish_time}")
-    lines.append(f"source: {source_url}")
+        lines.append(f"date: {json.dumps(publish_time, ensure_ascii=False)}")
+    lines.append(f"source: {json.dumps(source_url, ensure_ascii=False)}")
     lines.append(f"scraped_at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("---")
     lines.append("")

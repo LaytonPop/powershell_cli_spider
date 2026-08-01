@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-import sys
+import logging
 
 from bs4 import BeautifulSoup
 
+from ..errors import ParseError
 from ..http import retry_request
 from ..models import ScrapedArticle
 from .base import AbstractScraper
+
+logger = logging.getLogger(__name__)
 
 
 class WeChatScraper(AbstractScraper):
     def match(self, url: str) -> bool:
         return "mp.weixin.qq.com" in url
 
-    def scrape(self, url: str) -> ScrapedArticle | None:
+    def scrape(self, url: str) -> ScrapedArticle:
         response = retry_request(url)
-        if response is None:
-            return None
-
         soup = BeautifulSoup(response.text, "html.parser")
 
         title_tag = soup.find("h1", class_="rich_media_title")
@@ -25,13 +25,16 @@ class WeChatScraper(AbstractScraper):
 
         content_div = soup.find("div", class_="rich_media_content")
         if not content_div:
-            print("未找到微信公众号文章内容区域。", file=sys.stderr)
-            return None
+            raise ParseError("未找到微信公众号文章内容区域（rich_media_content 不存在，文章可能已删除或需要验证）。")
 
         publish_time = ""
         meta_tag = soup.find("em", class_="rich_media_meta rich_media_meta_text")
         if meta_tag:
             publish_time = meta_tag.get_text(strip=True)
+        if not publish_time:
+            time_tag = soup.find("em", id="publish_time")
+            if time_tag:
+                publish_time = time_tag.get_text(strip=True)
 
         for tag in content_div(["script", "style", "iframe"]):
             tag.decompose()

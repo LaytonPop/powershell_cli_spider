@@ -19,11 +19,16 @@
 
 ## 当前运行假设
 
-- 运行环境是 Windows + PowerShell
+- 支持 Windows + PowerShell（`spider.ps1`）与 Linux/macOS + bash/zsh（`spider.sh`）
 - `spider.ps1` 假定存在固定的 conda Python：
   - `C:\Users\morganWen\.conda\envs\spider\python.exe`
 - `spider.ps1` 假定脚本入口固定放在：
   - `F:\workspace3\cmd_utils\spider\spider.py`
+- `spider.sh` 不硬编码 Python 路径，按顺序使用：
+  - 环境变量 `SPIDER_PYTHON`（如指定）
+  - `python3`（PATH 中查找）
+- `spider.sh` 的脚本入口自动定位到其同级目录下的 `spider.py`
+- `SPIDER_BASE` 环境变量可覆盖默认知识库根目录（优先级高于 `config.py` 的 `BASES["default"]`）
 - `spider.py` 使用了 Python 3.10+ 语法：
   - `list[str]`
   - `str | None`
@@ -31,6 +36,7 @@
   - `requests`
   - `beautifulsoup4`
   - `html2text`
+- 开发依赖：`pytest`（测试套件在 `tests/`，46 个用例，全部离线可跑）
 
 如果要做环境整理，优先补齐依赖清单与路径配置化，而不是继续扩大硬编码路径。
 
@@ -76,15 +82,14 @@
 ## 当前支持的平台
 
 - 微信公众号：通过 `mp.weixin.qq.com` 匹配
-- 知乎文章 / 问题页：通过 `zhuanlan.zhihu.com` 或 `www.zhihu.com/question` 匹配
+- 知乎文章 / 专栏页：通过 `zhuanlan.zhihu.com` 匹配
+- 知乎问题页：通过 `zhihu.com/question/<id>` 匹配，提取问题标题 + 首个高赞回答
 
 注意：
 
-- 知乎抓取逻辑当前依赖 `h1.Post-Title` 和 `div.Post-RichText`
-- 这更像是知乎专栏页的 DOM 结构
-- 虽然 `match()` 允许问题页 URL，但问题页未必总能被当前解析逻辑正确提取
-
-如果用户反馈“知乎问题页抓不到内容”，优先检查 DOM 选择器，而不是怀疑保存逻辑。
+- 知乎专栏页抓取依赖 `h1.Post-Title` 和 `div.Post-RichText`
+- 知乎问题页抓取依赖 `h1.QuestionHeader-title` 和 `div.RichContent-inner`（回退 `AnswerCard` / `RichContent`）
+- 若用户反馈“知乎页面抓不到内容”，优先检查 DOM 选择器，而不是怀疑保存逻辑
 
 ## 输出路径约定
 
@@ -138,16 +143,23 @@ Python 主程序现在支持两种输出模式：
 
 当前 Python 主流程如下：
 
-1. 解析 CLI 参数
+1. 解析 CLI 参数（支持单条与 `--batch-file` 批量）
 2. 根据 URL 在 `spider_core.scrapers` 中找到匹配的平台爬虫
-3. 请求文章页面，失败时最多重试 3 次，并采用指数退避
+3. 请求文章页面，失败时最多重试 3 次，并采用指数退避；全部失败抛 `NetworkError`
 4. 根据 `-df` 或 `-f` 解析输出目录
-5. 为该文章创建独立目录
-6. 提取标题、正文 HTML、发布时间、来源 URL
-7. 下载正文中的图片到 `images/`
+5. 为该文章创建独立目录（目标文件已存在时自动加 `_2`/`_3` 后缀防覆盖）
+6. 提取标题、正文 HTML、发布时间、来源 URL；提取失败抛 `ParseError`
+7. 下载正文中的图片到 `images/`（`ThreadPoolExecutor` 并发下载，复用共享 Session）
 8. 将正文内图片链接改写成相对本地路径
 9. 生成 HTML 或 Markdown 文件
 10. 将结果写入目标目录
+
+失败模型（`spider_core/errors.py`）：
+
+- `NetworkError`：网络请求失败（重试后仍失败）
+- `ParseError`：页面拿到了但解析不到内容
+- `UnsupportedURLError`：没有爬虫匹配该 URL
+- `scrape()` 不再返回 `None`，调用方（含批量模式）按异常类型区分失败原因
 
 ## 输出格式约定
 
@@ -189,34 +201,30 @@ Python 主程序现在支持两种输出模式：
 
 当前限制：
 
-- 图片下载已复用 `retry_request()`（3 次指数退避），与文章页请求一致
-- 图片下载完全串行，多图文章效率低（可改用 `ThreadPoolExecutor` 并发下载）
-- 图片请求未复用 HTTP Session，同域名下 TLS 握手重复开销
-- 只根据 URL 后缀或 `Content-Type` 推断少量常见图片格式；无后缀且无 Content-Type 时默认回退 `.jpg`，对 PNG/GIF 可能误判扩展名
+- 图片下载复用共享 `requests.Session`（`http.get_session()`），并发线程数为 8（`DEFAULT_MAX_WORKERS`）
+- 图片扩展名判定顺序：魔数嗅探 > URL 后缀 > Content-Type > `.jpg` 回退
+- 知乎/微信对数据中心 IP 或非浏览器 UA 可能返回 403（重试后报 `NetworkError`），属站点反爬限制，不是脚本 bug
 
-## PowerShell 包装层
+## 包装层
 
-`spider.ps1` 定义了一个 `spider` 函数，不是独立 exe。
-
-它提供了两类调用方式：
+`spider.ps1`（Windows/PowerShell）与 `spider.sh`（Linux/macOS，bash/zsh）是两个等价入口，都可以：
 
 - 单个 URL 抓取
-- 通过 `-BatchFile` 按行读取 URL 进行批量抓取
+- 通过 `-BatchFile` / `-B` 按行读取 URL 进行批量抓取（批量循环已下沉到 Python CLI 的 `--batch-file`，两个包装层都只是转译参数）
 
-它额外做了这些事情：
+`spider.ps1` / `spider.sh` 额外做了这些事情：
 
 - 把位置参数直接当作 URL
-- 将 `-Format` 映射为 Python 的 `-o`
-- 将多个 `-DefaultFolder` 映射为多个 `-df`
-- 将 `-FullPath` 映射为 Python 的 `-f`
-- 对批处理文件逐行调用 Python 脚本
+- 将 `-Format` / `-o` 映射为 Python 的 `-o`
+- 将多个 `-DefaultFolder` / `-df` 映射为多个 `-df`
+- 将 `-FullPath` / `-f` 映射为 Python 的 `-f`
+- `spider.ps1` 对批处理文件逐行调用 Python 脚本（旧行为）
 
 注意：
 
-- Python 主程序本身没有批处理模式
-- 批处理能力只存在于 `spider.ps1`
+- Python 主程序自带 `--batch-file` 批量模式（`#` 开头为注释行，兼容 CRLF），退出码：全部成功 0，有失败 1
 - `-df` 与 `-f` 是互斥的，不能同时使用
-- 若修改 Python CLI 参数名，必须同步更新 `spider.ps1`
+- 若修改 Python CLI 参数名，必须同步更新 `spider.ps1` 与 `spider.sh`
 
 ## 常用命令
 
@@ -237,6 +245,30 @@ python .\spider.py -u "https://zhuanlan.zhihu.com/p/xxxx" -f "F:\workspace3\wen\
 ```powershell
 python .\spider.py --list-bases
 python .\spider.py --list-aliases
+```
+
+### Linux / macOS（bash / zsh）
+
+先设置知识库根目录（不设置则用 `config.py` 的默认值）：
+
+```bash
+export SPIDER_BASE="/home/you/Repository/obsidianDB"
+./spider.sh -u "https://mp.weixin.qq.com/s/xxx" -df A -df IoT -o md
+./spider.sh https://zhuanlan.zhihu.com/p/xxxx -f /home/you/articles -o html
+./spider.sh -B urls.txt -df B -o md --dry-run
+```
+
+也可以 source 后直接用函数：
+
+```bash
+source ./spider.sh
+spider "https://mp.weixin.qq.com/s/xxx" -o md -df A
+```
+
+批量模式（Python CLI 原生支持）：
+
+```bash
+python3 spider.py --batch-file urls.txt -df B -o md
 ```
 
 ### PowerShell 包装函数
@@ -340,17 +372,15 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -df B
 ## 维护注意事项
 
 - 不要默默改动 `BASES`、`ALIASES`、Python 路径或脚本路径；这些都是用户工作流的一部分
-- 如果要把硬编码路径改成配置文件，需要同时处理 Python 与 PowerShell 两层入口
+- 如果要把硬编码路径改成配置文件，需要同时处理 Python 与 PowerShell/bash 两层入口
 - `spider.py` 现在是薄入口，业务逻辑优先放在 `spider_core/`，不要重新堆回单文件
 - DOM 选择器很脆弱，站点一改版就可能失效
-- 当前没有自动测试，任何改动后至少要做一次：
-  - `--dry-run`
-  - `--list-bases`
-  - 本地单条抓取验证
-- 当前没有去重机制，同一篇文章重复抓取会复用同目录并覆盖同名主文件
-- 当前没有日志分级，报错主要依赖 stderr 输出
-- `sanitize_filename()` 空标题回退已改为 `article_` + MD5 前 8 位，避免碰撞
-- 爬取失败时 `scrape()` 返回 `None`，调用方无法区分"网络失败"、"解析失败"、"不支持该 URL"三种情况
+- 已有 `tests/` 测试套件（`pytest`，46 个用例，全部离线可跑），改动后至少运行：`python -m pytest tests/ -q`
+- 每次改动后至少做一次：`--dry-run`、`--list-bases`、本地单条抓取验证
+- 去重机制：目标文件已存在时自动加 `_2`/`_3` 后缀，不会静默覆盖旧文章
+- 日志分级：`logging` 输出到 stderr（INFO/ERROR），带时间戳；`--dry-run` 的解析结果走 stdout
+- `sanitize_filename()` 空标题回退已改为 `article_` + MD5 前 8 位，并拦截 `.`/`..`/隐藏文件名
+- 爬取失败通过异常区分：`NetworkError`（网络）、`ParseError`（解析）、`UnsupportedURLError`（不支持）
 
 ## 已知待优化项
 
@@ -358,30 +388,27 @@ spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -df B
 
 ### 可靠性（高优先级）
 
-- **图片扩展名回退优化**：`_guess_extension()` 在无后缀且无 Content-Type 时默认 `.jpg`，对 PNG/GIF 可能误判
+- **知乎/微信反爬**：数据中心 IP 容易 403，可支持自定义 cookie / Referer（`HEADERS` 目前只有 UA）
+- **真实站点回归样例**：`tests/` 目前用离线 mock HTML，建议沉淀少量真实抓取结果作为 golden 样例
 
 ### 效率（中优先级）
 
-- **图片并发下载**：当前 `for` 循环串行下载，改用 `ThreadPoolExecutor` 可显著加速多图文章
-- **HTTP Session 复用**：`http.py` 和 `media.py` 各自创建独立连接，共享 `requests.Session` 可减少 TLS 握手开销
-- **知乎 `match()` 收紧或报错细化**：问题页 URL 匹配成功但解析必然失败，应在匹配阶段或失败提示中区分页面类型
+- **知乎问题页多回答**：目前只取首个高赞回答，可支持选择回答或合并全部回答
 - **PowerShell 参数解析简化**：`ConvertTo-SpiderArguments` 手写 ~100 行 switch，可用 `Param()` 块精简
 
 ### 工程化（低优先级）
 
-- **结构化日志**：当前全部用 `print(..., file=sys.stderr)`，无级别、无时间戳；引入 `logging` 模块成本极低
-- **爬取失败结构化错误**：`scrape()` 返回 `None` 无法区分失败原因，可改为自定义异常或 `Result[T, E]` 模式
-- **批量抓取失败汇总**：`spider.ps1` 的 `-BatchFile` 结束后无"成功 N / 失败 M"统计
+- **配置化**：`BASES` 目前仅支持 `SPIDER_BASE` 环境变量覆盖，可迁移到 `~/.config/spider.toml`
 - **Markdown 后处理**：`html2text` 输出偶有多余空行或断裂表格，可加一层清理
+- **批量并发**：`process_batch` 目前串行处理 URL，可按需并行（注意站点限流风险）
 
 ## 建议的后续演进方向
 
 - 为 `spider_core` 提供稳定的程序化 API，供 MCP 或桌面 agent 直接调用
-- 把硬编码路径迁移到配置文件或环境变量
-- 为各平台提取逻辑补最小回归样例
-- 为批量抓取增加失败汇总
-- 为知乎问题页补单独解析逻辑
-- 图片下载并发化 (`ThreadPoolExecutor`)
+- 把硬编码路径迁移到配置文件或环境变量（已支持 `SPIDER_BASE`，可进一步做配置文件）
+- 为各平台提取逻辑补真实站点回归样例
+- 为批量抓取增加并发与断点续抓
+- 为知乎问题页补充多回答选择逻辑
 
 ## 文档同步要求
 
