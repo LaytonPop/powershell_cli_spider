@@ -1,424 +1,186 @@
 # AGENT.md
 
-本文件面向后续维护这个仓库的 AI Agent / 协作者，目标是让人快速理解这个工具当前的真实状态，并在修改时保持行为一致。注意：必须符合法律要求，不能侵犯他人的权益，这个是要全局注意的。
+本文件面向后续维护这个仓库的 AI Agent / 协作者：说明当前真实架构、必须守住的行为、验证方式。修改前先读本文件和 `README.md`。
 
-## 项目目标
+注意：本工具仅用于个人学习与资料归档，必须符合法律要求、尊重目标网站服务条款，不能用于侵犯他人权益的用途。
 
-这是一个面向终端使用的文章爬虫工具，用来把网页文章抓取到本地知识库目录中，当前重点是：
+## 项目一句话
 
-- 从指定文章 URL 抓取正文
-- 下载正文中的图片到本地
-- 生成适合归档的 `html` 或 `md` 文件
-- 按知识库目录结构存放到固定 base path 下
+跨平台终端文章抓取工具（Windows PowerShell / Linux、macOS bash）：把微信公众号 / 知乎文章正文和图片抓到本地知识库，输出 Markdown 或自包含 HTML（微信阅读模式）。
 
-当前仓库的入口仍然很精简，但 Python 核心已经拆成模块：
+## 技术栈
 
-- `spider.py`：Python 薄入口，只负责调用 CLI
-- `spider.ps1`：PowerShell 包装函数，负责更顺手的终端调用和批量抓取
-- `spider_core/`：Python 核心模块，负责配置、抓取器、图片处理、渲染、保存流程、CLI
+- Python 3.10+（实测 3.11）
+- `requests`（HTTP）、`beautifulsoup4`（解析/清洗）、`html2text`（HTML→Markdown）
+- HTTP 使用共享 `requests.Session`；图片用 `ThreadPoolExecutor` 并发下载（默认 8 线程），扩展名按文件头魔数判定
+- 测试用标准库 `unittest`，不引入第三方测试框架
+- 不依赖浏览器 / playwright；HTML 渲染完全在 Python 内完成
 
-## 当前运行假设
+## 模块职责
 
-- 支持 Windows + PowerShell（`spider.ps1`）与 Linux/macOS + bash/zsh（`spider.sh`）
-- `spider.ps1` 假定存在固定的 conda Python：
-  - `C:\Users\morganWen\.conda\envs\spider\python.exe`
-- `spider.ps1` 假定脚本入口固定放在：
-  - `F:\workspace3\cmd_utils\spider\spider.py`
-- `spider.sh` 不硬编码 Python 路径，按顺序使用：
-  - 环境变量 `SPIDER_PYTHON`（如指定）
-  - `python3`（PATH 中查找）
-- `spider.sh` 的脚本入口自动定位到其同级目录下的 `spider.py`
-- `SPIDER_BASE` 环境变量可覆盖默认知识库根目录（优先级高于 `config.py` 的 `BASES["default"]`）
-- `spider.py` 使用了 Python 3.10+ 语法：
-  - `list[str]`
-  - `str | None`
-- 当前已有 `requirements.txt`，代码依赖这些第三方包：
-  - `requests`
-  - `beautifulsoup4`
-  - `html2text`
-- 开发依赖：`pytest`（测试套件在 `tests/`，46 个用例，全部离线可跑）
+| 路径 | 职责 |
+| --- | --- |
+| `spider.py` | 入口，只调用 `spider_core.cli.main` |
+| `spider.ps1` | Windows PowerShell 薄封装：定位 Python（`SPIDER_PYTHON` → `.venv` → conda 环境 → PATH）并把参数原样转发，**不做参数解析** |
+| `spider.sh` | Linux / macOS bash 薄封装：定位 Python（`SPIDER_PYTHON` → `.venv/bin/python` → `python3` → `python`）并原样转发参数，**不做参数解析** |
+| `spider.config.toml` | 知识库根目录 `[bases]`、目录别名 `[aliases]`、默认收件箱 |
+| `spider_core/cli.py` | 唯一的命令行解析源；参数定义、dry-run、日志与退出码 |
+| `spider_core/config.py` | 配置查找与加载、`SpiderConfig`、目录段拆分、别名展开、输出路径解析 |
+| `spider_core/service.py` | 单篇文章保存流程（含 `_unique_article_dir` 重名去重），返回 `SaveResult` |
+| `spider_core/http.py` | 共享 `requests.Session`、请求与重试（3 次、指数退避、15s 超时），失败抛 `NetworkError` |
+| `spider_core/errors.py` | 错误层级：`SpiderError` → `NetworkError` / `ParseError` / `UnsupportedURLError` |
+| `spider_core/models.py` | `ScrapedArticle` 数据结构 |
+| `spider_core/scrapers/` | 平台识别与正文/元数据提取（`wechat.py`、`zhihu.py`、`base.py`）；抓取失败抛 `SpiderError` 子类 |
+| `spider_core/media.py` | 图片并发下载、魔数扩展名、`images/<md5>.<ext>` 命名、正文链接改写 |
+| `spider_core/html_cleaner.py` | 正文清洗：去掉 `visibility`/`opacity`、根节点 `display:none`、懒加载图规范化、微信自定义标签占位 |
+| `spider_core/renderers.py` | Markdown 生成（frontmatter + html2text）与微信阅读模式 HTML 模板 |
+| `tests/` | 单元测试（不联网） |
 
-如果要做环境整理，优先补齐依赖清单与路径配置化，而不是继续扩大硬编码路径。
+## 数据流
 
-## 模块结构
+1. `cli.main` 解析参数、加载配置、解析输出目录
+2. `service.save_article` → `scrape_article(url)` → `find_scraper(url)` + `scraper.scrape(url)` 得到 `ScrapedArticle`；网络/解析失败以 `SpiderError` 子类抛出，由 `save_article` 收进 `SaveResult.error`
+3. 建文章目录 `<输出目录>/<sanitize_filename(title)>/`；同名已存在时用 `_2`、`_3` 后缀，不覆盖旧文章
+4. `media.download_and_rewrite_images` 并发下载图片并改写为 `images/<md5>.<ext>`
+5. `renderers.render_documents` 生成所需格式：
+   - HTML：`html_cleaner.clean_article_html` 清洗后套阅读模式模板
+   - Markdown：`html2text` 转换 + YAML frontmatter
+6. 写入文件，`cli` 输出日志并按失败数决定退出码
 
-当前推荐从下面这些文件建立上下文：
+## 必须守住的不变量
 
-- `spider.py`
-- `spider.ps1`
-- `spider_core/cli.py`
-- `spider_core/service.py`
-- `spider_core/config.py`
-- `spider_core/scrapers/`
+- Markdown 必须保留 YAML frontmatter（字段见 `README.md`；`date` 仅在提取到发布时间时输出）。
+- 正文图片必须本地化到 `images/`，Markdown 默认相对路径，`-L wikilink` 用 `![[images/x]]`。
+- 同名文章目录已存在时必须新建 `<标题>_2/`、`<标题>_3/`，不得覆盖已有文章；`-n/--skip-existing` 只跳过不重抓。
+- 抓取失败必须抛 `SpiderError` 子类（`NetworkError` / `ParseError` / `UnsupportedURLError`），由 CLI 捕获后计入失败数，不要吞掉异常返回空结果。
+- HTML 输出必须清除会让正文不可见的样式（`visibility`、`opacity`、正文根节点的 `display:none`），不得回归成"打开空白"。
+- Python CLI 是唯一参数解析源；`spider.ps1` / `spider.sh` 只能转发参数，不要重新在里面写一套解析。
+- 默认输出格式为 `md`，默认落点为 `default_inbox`（默认 `000-inbox`）。
+- `-o/--out` 是直接输出目录，`-d/--dir` 是知识库内目录段，两者互斥。
+- 目录别名 `A/B/C` 展开为 `001-Current_Projects / 002-raw_resource / 003-wiki_schema`；未知别名原样保留。
+- 旧参数（`-u/--url`、`-df`、`-f`、`--batch-file`）已移除，保留解析入口只为输出迁移提示；不要静默重新兼容。
 
-模块职责如下：
-
-- `spider_core/config.py`
-  - 基础配置
-  - `BASES`
-  - `ALIASES`
-  - 输出目录解析
-- `spider_core/http.py`
-  - 页面抓取重试逻辑
-- `spider_core/models.py`
-  - `ScrapedArticle` 数据结构
-- `spider_core/scrapers/`
-  - 平台识别与正文提取
-- `spider_core/media.py`
-  - 图片下载与正文图片链接改写
-- `spider_core/renderers.py`
-  - HTML / Markdown 生成
-- `spider_core/service.py`
-  - 文章保存主流程
-- `spider_core/cli.py`
-  - CLI 参数与命令行行为
-
-这套拆分的目标是：
-
-- 保留现有 CLI 和 PowerShell 工作流
-- 让核心逻辑可以被未来的 MCP、桌面 agent、RAG 管线复用
-- 让新增站点和调整输出结构时只改对应模块
-
-## 当前支持的平台
-
-- 微信公众号：通过 `mp.weixin.qq.com` 匹配
-- 知乎文章 / 专栏页：通过 `zhuanlan.zhihu.com` 匹配
-- 知乎问题页：通过 `zhihu.com/question/<id>` 匹配，提取问题标题 + 首个高赞回答
-
-注意：
-
-- 知乎专栏页抓取依赖 `h1.Post-Title` 和 `div.Post-RichText`
-- 知乎问题页抓取依赖 `h1.QuestionHeader-title` 和 `div.RichContent-inner`（回退 `AnswerCard` / `RichContent`）
-- 若用户反馈“知乎页面抓不到内容”，优先检查 DOM 选择器，而不是怀疑保存逻辑
-
-## 输出路径约定
-
-Python 主程序现在支持两种输出模式：
-
-- 默认知识库模式：使用 `-df`
-- 直接路径模式：使用 `-f`
-
-默认知识库模式通过 `BASES` 和 `ALIASES` 决定输出目录。
-
-当前 `BASES` 只有一个预设：
-
-- `default` -> `F:\workspace3\wen\Repository\obsidianDB`
-
-当前 `ALIASES`：
-
-- `A` -> `001-Current_Projects`
-- `B` -> `002-raw_resource`
-- `C` -> `003-wiki_schema`
-
-规则：
-
-- `-df A` 会解析成 `001-Current_Projects`
-- `-df B` 会解析成 `002-raw_resource`
-- `-df C` 会解析成 `003-wiki_schema`
-- `-df A -df mathcs` 会输出到 `default\001-Current_Projects\mathcs`
-
-直接路径模式下：
-
-- `-f` 接收完整路径
-- 不做 alias 展开
-- 不拼接默认知识库根目录
-
-最终文章输出结构如下：
+## 命令行（当前事实）
 
 ```text
-<base>\<folder...>\<sanitized_title>\
-  <sanitized_title>.html | <sanitized_title>.md
-  images\
-    <md5>.<ext>
+spider URL [URL ...] [-b FILE] [-o DIR | -d SEG ...] [--base NAME]
+       [-F md|html|both] [-L relative|wikilink] [-n] [--dry-run] [--open]
+       [-q|-v] [--config FILE] [--list-bases] [--list-aliases] [--version]
 ```
 
-其中：
-
-- 文章目录名由标题清洗后生成
-- 非法文件名字符会被移除
-- 空白会被替换成 `_`
-- 文件名最长保留 100 个字符
-
-## 主流程
-
-当前 Python 主流程如下：
-
-1. 解析 CLI 参数（支持单条与 `--batch-file` 批量）
-2. 根据 URL 在 `spider_core.scrapers` 中找到匹配的平台爬虫
-3. 请求文章页面，失败时最多重试 3 次，并采用指数退避；全部失败抛 `NetworkError`
-4. 根据 `-df` 或 `-f` 解析输出目录
-5. 为该文章创建独立目录（目标文件已存在时自动加 `_2`/`_3` 后缀防覆盖）
-6. 提取标题、正文 HTML、发布时间、来源 URL；提取失败抛 `ParseError`
-7. 下载正文中的图片到 `images/`（`ThreadPoolExecutor` 并发下载，复用共享 Session）
-8. 将正文内图片链接改写成相对本地路径
-9. 生成 HTML 或 Markdown 文件
-10. 将结果写入目标目录
-
-失败模型（`spider_core/errors.py`）：
-
-- `NetworkError`：网络请求失败（重试后仍失败）
-- `ParseError`：页面拿到了但解析不到内容
-- `UnsupportedURLError`：没有爬虫匹配该 URL
-- `scrape()` 不再返回 `None`，调用方（含批量模式）按异常类型区分失败原因
-
-## 输出格式约定
-
-### HTML 输出
-
-- 使用 `build_html_doc()`
-- 外层会包一层带简单样式的完整 HTML 页面
-- 页面中包含：
-  - 标题
-  - 发布时间
-  - 来源链接
-  - 抓取时间
-  - 正文 HTML
-
-### Markdown 输出
-
-- 使用 `build_markdown_doc()`
-- 先用 `html2text` 将 HTML 转成 Markdown
-- 文件头包含 YAML frontmatter：
-  - `title`
-  - `date`（若有）
-  - `source`
-  - `scraped_at`
-- 正文前会追加一级标题 `# {title}`
-
-## 图片处理规则
-
-图片下载由 `spider_core/media.py` 中的 `download_and_rewrite_images()` 完成，当前行为很重要：
-
-- 会自动创建 `images/` 目录
-- 会处理微信公众号常见懒加载属性：
-  - `data-wxsrc`
-  - `data-src`
-  - `data-original-src`
-- `data:` 内联图片会被跳过
-- 相对路径和 `//` 协议相对路径会被转成绝对 URL
-- 图片文件名使用图片 URL 的 MD5 值，避免重名
-- 图片保存后，正文中的 `src` 会被重写为 `images/<filename>`
-
-当前限制：
-
-- 图片下载复用共享 `requests.Session`（`http.get_session()`），并发线程数为 8（`DEFAULT_MAX_WORKERS`）
-- 图片扩展名判定顺序：魔数嗅探 > URL 后缀 > Content-Type > `.jpg` 回退
-- 知乎/微信对数据中心 IP 或非浏览器 UA 可能返回 403（重试后报 `NetworkError`），属站点反爬限制，不是脚本 bug
-
-## 包装层
-
-`spider.ps1`（Windows/PowerShell）与 `spider.sh`（Linux/macOS，bash/zsh）是两个等价入口，都可以：
-
-- 单个 URL 抓取
-- 通过 `-BatchFile` / `-B` 按行读取 URL 进行批量抓取（批量循环已下沉到 Python CLI 的 `--batch-file`，两个包装层都只是转译参数）
-
-`spider.ps1` / `spider.sh` 额外做了这些事情：
-
-- 把位置参数直接当作 URL
-- 将 `-Format` / `-o` 映射为 Python 的 `-o`
-- 将多个 `-DefaultFolder` / `-df` 映射为多个 `-df`
-- 将 `-FullPath` / `-f` 映射为 Python 的 `-f`
-- `spider.ps1` 对批处理文件逐行调用 Python 脚本（旧行为）
-
-注意：
-
-- Python 主程序自带 `--batch-file` 批量模式（`#` 开头为注释行，兼容 CRLF），退出码：全部成功 0，有失败 1
-- `-df` 与 `-f` 是互斥的，不能同时使用
-- 若修改 Python CLI 参数名，必须同步更新 `spider.ps1` 与 `spider.sh`
-
-## 常用命令
-
-### 直接调用 Python
+示例：
 
 ```powershell
-python .\spider.py -u "https://mp.weixin.qq.com/s/xxx" -df A -df IoT -o md
+python .\spider.py "https://mp.weixin.qq.com/s/xxx" -F both -d A/IoT
+python .\spider.py "url1" "url2" -o D:\temp\articles
+python .\spider.py -b urls.txt -d B -F md -n
+python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx"
 ```
 
-```powershell
-python .\spider.py --dry-run -df A -df IoT -o md
-```
+## 平台与选择器
+
+- 微信：URL 含 `mp.weixin.qq.com`；标题 `h1.rich_media_title` / `og:title` / `var msg_title`；正文 `div.rich_media_content` 或 `#js_content`；发布时间优先页面文本，否则从 `var ct` / `var create_time` 时间戳格式化；公众号名优先 `#js_name`，否则 `nickname` JS 变量 / `og:article:author`。
+- 知乎：`zhuanlan.zhihu.com`（专栏文章：标题 `h1.Post-Title`，正文 `div.Post-RichText`，时间 `.ContentItem-time` 或 `meta[itemprop=datePublished]`）或 `www.zhihu.com/question`（问题页：标题 `h1.QuestionHeader-title`，正文取首个 `div.RichContent-inner` / `div.AnswerCard` / `div.RichContent`，时间 `meta[itemprop=dateModified]`，作者 `.AuthorInfo-name`）。
+- 其他 URL 会被拒绝（"不支持的 URL 类型"）。
+
+## 配置系统
+
+查找顺序：`--config` → `SPIDER_CONFIG` → 仓库根 `spider.config.toml` → `~/.config/spider/spider.config.toml`。
+`SPIDER_VAULT` 可覆盖 `[bases].default`；旧版 `SPIDER_BASE` 作为兼容回退（两者都设置时 `SPIDER_VAULT` 优先）。
+知识库目录不存在时，非 dry-run 会报错退出（提示改配置或改用 `-o`）。
+
+## 验证方式
 
 ```powershell
-python .\spider.py -u "https://zhuanlan.zhihu.com/p/xxxx" -f "F:\workspace3\wen\temp\articles" -o html
-```
+# 1. 单元测试（无网络，当前 99 个用例）
+python -m unittest discover -s tests -v
 
-```powershell
+# 2. 参数解析冒烟（不抓取）
+python .\spider.py --help
+python .\spider.py --version
 python .\spider.py --list-bases
 python .\spider.py --list-aliases
+python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx" -d A/IoT -F both
+
+# 3. 包装脚本
+.\spider.ps1 --version
+. .\spider.ps1; spider --version
+
+# Linux / macOS（WSL、Git Bash 均可）
+./spider.sh --version
+. ./spider.sh; spider --version
+
+# 4. 真实抓取 E2E（产物在 tmp_out/，已 gitignore）
+python .\spider.py "https://mp.weixin.qq.com/s/SSU_GOBTHxiGQGPAF0xSHg" -o tmp_out\e2e -F both
+# 校验：产物 html 中不应出现 "visibility"/"opacity"，应包含 3 张以上本地图片
 ```
 
-### Linux / macOS（bash / zsh）
-
-先设置知识库根目录（不设置则用 `config.py` 的默认值）：
-
-```bash
-export SPIDER_BASE="/home/you/Repository/obsidianDB"
-./spider.sh -u "https://mp.weixin.qq.com/s/xxx" -df A -df IoT -o md
-./spider.sh https://zhuanlan.zhihu.com/p/xxxx -f /home/you/articles -o html
-./spider.sh -B urls.txt -df B -o md --dry-run
-```
-
-也可以 source 后直接用函数：
-
-```bash
-source ./spider.sh
-spider "https://mp.weixin.qq.com/s/xxx" -o md -df A
-```
-
-批量模式（Python CLI 原生支持）：
-
-```bash
-python3 spider.py --batch-file urls.txt -df B -o md
-```
-
-### PowerShell 包装函数
-
-先把函数载入当前 shell：
+改站点选择器或渲染逻辑时，必须补做真实抓取；必要时用 Chrome headless 截图肉眼确认 HTML 可读：
 
 ```powershell
-. .\spider.ps1
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new --disable-gpu `
+  --hide-scrollbars --window-size=1100,1700 --screenshot="$PWD\tmp_out\shot.png" `
+  "file:///.../<文章目录>/<标题>.html"
 ```
 
-然后执行：
+## 常见任务
 
-```powershell
-spider "https://mp.weixin.qq.com/s/xxx" -o md -df A -df IoT
+- **新增站点**：在 `spider_core/scrapers/` 新建 `AbstractScraper` 子类并注册到 `__init__.py` 的 `SCRAPERS`；特殊图片属性补到 `media.LAZY_IMAGE_ATTRIBUTES`；补元数据提取与测试。
+- **调整输出目录规则**：只改 `config.py`（`SpiderConfig` / `split_dir_segments` / `resolve_alias`），CLI 不重复实现。
+- **新增输出格式**：在 `renderers.FORMAT_EXTENSIONS`、`render_documents`、`cli.FORMAT_TARGETS` 三处同步，并补测试。
+- **HTML 又变空白**：先检查保存产物中是否残留 `visibility`/`opacity`/根节点 `display:none`，再看 `html_cleaner.clean_style` 与 `_is_content_root` 的判定是否覆盖新的容器写法。
+- **发布时间缺失**：微信先看原文页 `var ct` / `var create_time` 是否改名；知乎看 `.ContentItem-time` 是否仍存在。
+
+## 已知限制
+
+- 知乎可能返回 403（反爬），当前不做登录态 / Cookie；问题页只抓首个回答。
+- 微信音频、视频、小程序、公众号名片在离线 HTML 中只显示占位文案。
+- 图片并发下载（默认 8 线程）无进度条；失败图片保留原始远程链接并打 warning。
+- 微信 `author` 常为空（页面本身未提供）。
+- 搜索结果里的 `mp.weixin.qq.com/s?__biz=...` 链接常跳验证页，只能用可直接打开的文章链接。
+
+## 提交前检查
+
+- `python -m unittest discover -s tests -v` 全绿。
+- `--dry-run` 与 `--list-bases` 的行为和 README 一致。
+- 若改了 CLI 参数、输出结构、默认路径，同步更新 `README.md` 与本文件、`CLUADE.md`。
+- 不把 `tmp_out/`、抓取产物、真实知识库路径之外的临时文件提交进仓库。
+
+## 提交与上传规范
+
+从 v1.0.0 起，本仓库的提交信息与分支命名统一按下面约定执行（此前历史提交不追溯）：
+
+**提交信息：Conventional Commits 风格**
+
+```text
+<type>(<scope>): <中文摘要>
+
+<可选的正文，每行一个要点>
 ```
 
-```powershell
-spider -u "https://zhuanlan.zhihu.com/p/xxxx" -o html -f "F:\workspace3\wen\temp\articles"
-```
+- `type`：`feat` 新功能、`fix` 修复、`refactor` 重构、`test` 测试、`docs` 文档、`chore` 杂项、`perf` 性能、`build` 构建/依赖。
+- `scope` 可省略，常用：`cli`、`config`、`renderers`、`scrapers`、`media`、`ps1`、`tests`、`docs`。
+- 摘要用中文、尽量不超过 50 字、结尾不加句号；正文说明动机、影响与验证方式。
+- 破坏性变更：`type` 后加 `!`（如 `refactor(cli)!: ...`），并在正文写一行 `BREAKING CHANGE: <不兼容点 + 迁移方式>`。
 
-```powershell
-spider -BatchFile "F:\workspace3\wen\idea\urls.txt" -o html -df B
-```
+**分支命名**
 
-## 新增站点时的约定
+- `feat/<短横线主题>`、`fix/<短横线主题>`、`docs/<主题>`、`chore/<主题>`。
+- `main` 只接受通过测试的合并；个人小改动可直接在 `main` 提交。
 
-新增平台时，保持最小改动路径：
+**提交粒度**
 
-1. 在 `spider_core/scrapers/` 下新增一个文件，或在合适文件中新增一个抓取器类
-2. 继承 `AbstractScraper`
-3. 实现：
-   - `match(url)`
-   - `scrape(url)`
-4. `scrape()` 返回统一结构：
-   - `ScrapedArticle`
-   - 或与其字段完全一致的数据
-5. 将实例加入 `spider_core/scrapers/__init__.py` 中的 `SCRAPERS`
-6. 如该站图片使用特殊懒加载属性，在 `spider_core/media.py` 中补充
-7. 若该站点需要特殊清洗逻辑，优先收敛到该站抓取器内部，不要把站点分支散落到 CLI 或保存层
-8. 同步更新本文件和 `CLUADE.md`
+- 一个提交只做一件事：功能/修复与对应测试可同提交，文档、配置、格式调整单独提交。
 
-## 如何新增站点
+**上传（push）步骤**
 
-推荐步骤：
+1. `git status`：确认没有抓取产物、临时文件、本机路径噪音（`tmp_out/`、`.alma-snapshots` 已忽略）。
+2. `python -m unittest discover -s tests` 全绿。
+3. `git pull --rebase origin main`。
+4. `git push origin main`（提交信息即上传命名依据，推送后 `git log -1 --oneline` 应与远端一致）。
 
-1. 先确认是否真的属于“文章页”抓取，而不是列表页、搜索页或登录态页面
-2. 在 `spider_core/scrapers/` 新建抓取器，例如 `new_site.py`
-3. 在该文件中实现：
-   - URL 匹配
-   - 页面请求后的 DOM 解析
-   - 标题提取
-   - 正文提取
-   - 发布时间提取
-4. 返回 `ScrapedArticle`
-5. 在 `spider_core/scrapers/__init__.py` 注册实例
-6. 如果图片链接不是标准 `src`，补 `spider_core/media.py`
-7. 跑最小验证：
-   - `python .\spider.py --help`
-   - `python .\spider.py --dry-run -df A -o md`
-   - `python .\spider.py --dry-run -f "F:\workspace3\wen\temp\articles" -o md`
-   - 真实 URL 抓取验证
-8. 更新 `AGENT.md` 与 `CLUADE.md` 中的支持站点说明
+**版本号与发布标签**
 
-新增站点时的注意事项：
+- `spider_core/cli.py` 的 `VERSION` 是唯一版本源；不兼容的参数或输出结构变更升主版本，功能新增升次版本。
+- 每次发布在通过测试的 `main` 提交上打注释标签 `v<major>.<minor>.<patch>`（如 `v1.0.0`），推送时带上标签：`git push origin main --follow-tags`。
 
-- 不要为了某一个站点去改全局输出结构
-- 不要随意改 CLI 参数名
-- 优先把站点差异封装在 scraper 内部
-- 如果站点依赖登录、cookie 或 JS 渲染，要在文档里明确说明
-- 若新站点引入额外依赖，必须同步更新依赖说明
-
-## 如何调整输出目录结构
-
-目录结构调整时，优先检查这些位置：
-
-1. `spider_core/config.py`
-   - `BASES`
-   - `ALIASES`
-   - `resolve_output_dir()`
-   - `resolve_default_output_dir()`
-   - `normalize_output_path()`
-2. `spider_core/renderers.py`
-   - 文件名清洗逻辑
-3. `spider_core/service.py`
-   - 文章目录
-   - `images/` 子目录
-   - 主文件扩展名
-4. `spider.ps1`
-   - 帮助文本中的示例和别名说明
-5. `AGENT.md` / `CLUADE.md`
-   - 输出路径约定
-   - 常用命令
-
-调整时的原则：
-
-- 优先保持“文章独立目录 + 主文件 + images 子目录”不变
-- 若必须变更目录层级，要明确旧路径是否兼容
-- 不要只改 Python，不改 PowerShell 帮助文本
-- 不要只改代码，不改文档
-
-## 维护注意事项
-
-- 不要默默改动 `BASES`、`ALIASES`、Python 路径或脚本路径；这些都是用户工作流的一部分
-- 如果要把硬编码路径改成配置文件，需要同时处理 Python 与 PowerShell/bash 两层入口
-- `spider.py` 现在是薄入口，业务逻辑优先放在 `spider_core/`，不要重新堆回单文件
-- DOM 选择器很脆弱，站点一改版就可能失效
-- 已有 `tests/` 测试套件（`pytest`，46 个用例，全部离线可跑），改动后至少运行：`python -m pytest tests/ -q`
-- 每次改动后至少做一次：`--dry-run`、`--list-bases`、本地单条抓取验证
-- 去重机制：目标文件已存在时自动加 `_2`/`_3` 后缀，不会静默覆盖旧文章
-- 日志分级：`logging` 输出到 stderr（INFO/ERROR），带时间戳；`--dry-run` 的解析结果走 stdout
-- `sanitize_filename()` 空标题回退已改为 `article_` + MD5 前 8 位，并拦截 `.`/`..`/隐藏文件名
-- 爬取失败通过异常区分：`NetworkError`（网络）、`ParseError`（解析）、`UnsupportedURLError`（不支持）
-
-## 已知待优化项
-
-按优先级排列，供后续迭代参考。
-
-### 可靠性（高优先级）
-
-- **知乎/微信反爬**：数据中心 IP 容易 403，可支持自定义 cookie / Referer（`HEADERS` 目前只有 UA）
-- **真实站点回归样例**：`tests/` 目前用离线 mock HTML，建议沉淀少量真实抓取结果作为 golden 样例
-
-### 效率（中优先级）
-
-- **知乎问题页多回答**：目前只取首个高赞回答，可支持选择回答或合并全部回答
-- **PowerShell 参数解析简化**：`ConvertTo-SpiderArguments` 手写 ~100 行 switch，可用 `Param()` 块精简
-
-### 工程化（低优先级）
-
-- **配置化**：`BASES` 目前仅支持 `SPIDER_BASE` 环境变量覆盖，可迁移到 `~/.config/spider.toml`
-- **Markdown 后处理**：`html2text` 输出偶有多余空行或断裂表格，可加一层清理
-- **批量并发**：`process_batch` 目前串行处理 URL，可按需并行（注意站点限流风险）
-
-## 建议的后续演进方向
-
-- 为 `spider_core` 提供稳定的程序化 API，供 MCP 或桌面 agent 直接调用
-- 把硬编码路径迁移到配置文件或环境变量（已支持 `SPIDER_BASE`，可进一步做配置文件）
-- 为各平台提取逻辑补真实站点回归样例
-- 为批量抓取增加并发与断点续抓
-- 为知乎问题页补充多回答选择逻辑
-
-## 文档同步要求
-
-以下改动发生时，必须同步更新 `AGENT.md` 与 `CLUADE.md`：
-
-- 支持的新站点发生变化
-- CLI 参数发生变化
-- base path / alias 规则发生变化
-- 输出目录结构发生变化
-- `-df` / `-f` 模式语义发生变化
-- PowerShell 包装层调用方式发生变化
-- Python 模块结构发生变化
-- Python 依赖或环境假设发生变化

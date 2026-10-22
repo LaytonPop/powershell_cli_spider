@@ -1,132 +1,44 @@
 # CLUADE.md
 
-本文件面向使用 Claude 类助手维护该仓库时的快速协作约定。内容尽量短、可执行、贴近当前代码，而不是通用模板。
+本文件是使用 Claude 类助手维护本仓库时的最短协作约定。完整架构与行为约束看 `AGENT.md`，用户用法看 `README.md`。
 
-## 先读什么
+文件名 `CLUADE.md` 是有意保留的；如需对齐社区习惯再改名为 `CLAUDE.md`。
 
-进入仓库后，优先阅读：
+## 先读
 
-- `spider.py`
-- `spider.sh` / `spider.ps1`（Linux 用前者，Windows 用后者）
-- `spider_core/cli.py`
-- `spider_core/service.py`
-- `spider_core/config.py`
-- `spider_core/scrapers/`
-- `spider_core/errors.py`（失败模型）
+1. `README.md`（用户视角：参数、配置、FAQ）
+2. `AGENT.md`（架构、不变量、验证命令）
+3. 改动点对应模块：`spider_core/cli.py`、`config.py`、`service.py`、`errors.py`、`scrapers/`、`media.py`、`renderers.py`、`html_cleaner.py`
 
-这个项目的入口仍然简单，但 Python 真实逻辑现在主要在 `spider_core/` 里。
+## 硬规则
 
-## 项目一句话
+- Python CLI（`spider_core/cli.py`）是唯一参数解析源；`spider.ps1` / `spider.sh` 只负责找 Python 并转发参数，禁止在其中重新实现参数解析。
+- 旧参数已断代（`-u/--url`、`-df`、`-f`、`--batch-file`）：不要静默恢复兼容，只保留迁移报错。
+- 抓取失败必须抛 `SpiderError` 子类（`NetworkError` / `ParseError` / `UnsupportedURLError`），由 `service.save_article` 收进 `SaveResult.error`，不要返回 `None` 吞掉失败。
+- 同名文章目录已存在时用 `_2`、`_3` 后缀新建，不得覆盖旧文章。
+- HTML 输出必须清除 `visibility` / `opacity` / 正文根节点 `display:none`，否则会回归"打开空白"。
+- Markdown 的 YAML frontmatter 与图片本地化行为不能破坏；默认格式是 `md`，默认落点是 `000-inbox`。
+- 知识库路径只来自 `spider.config.toml`（或 `--config`/`SPIDER_CONFIG`/`SPIDER_VAULT`，旧 `SPIDER_BASE` 仅作兼容回退），不要重新硬编码盘符。
+- 改动 CLI、输出结构或路径规则时，同步更新 `README.md`、`AGENT.md` 与本文件。
 
-这是一个跨平台终端爬虫工具，用来把微信公众号和知乎文章抓取到本地知识库目录，并把图片一并保存到文章目录下。Windows 用 `spider.ps1`，Linux/macOS 用 `spider.sh`。
-
-## 当前事实
-
-- 默认知识库根目录是 `F:\workspace3\wen\Repository\obsidianDB`，可用 `SPIDER_BASE` 环境变量覆盖
-- PowerShell 入口依赖固定 Python：`C:\Users\morganWen\.conda\envs\spider\python.exe`
-- bash 入口不硬编码 Python：`SPIDER_PYTHON` 环境变量或 `python3`
-- Python 入口 `spider.py` 现在是薄封装，核心逻辑在 `spider_core/`
-- 当前支持输出：`html`、`md`
-- 当前支持站点：`mp.weixin.qq.com`、`zhuanlan.zhihu.com`、`zhihu.com/question/<id>`（问题页取首答）
-- 批量抓取已下沉到 Python CLI（`--batch-file`），包装层只转译参数
-- 已有 `requirements.txt`（`requests`、`beautifulsoup4`、`html2text`）+ `pytest`（开发依赖）
-- 爬取失败用异常区分：`NetworkError` / `ParseError` / `UnsupportedURLError`
-- 日志用 `logging`（stderr，带时间戳）；`--dry-run` 解析结果走 stdout
-- 去重：目标文件已存在时自动加 `_2`/`_3` 后缀，不覆盖旧文章
-
-## 你在修改时要守住的行为
-
-- 输入一个 URL 后，最终应在知识库中生成“文章目录 + 主文件 + images 子目录”
-- Markdown 输出必须继续保留 frontmatter
-- 图片链接必须继续改写为本地相对路径
-- `-df` 目录参数必须继续支持别名展开：
-  - `A -> 001-Current_Projects`
-  - `B -> 002-raw_resource`
-  - `C -> 003-wiki_schema`
-- `-f` 现在表示直接完整输出路径，不再表示默认库下的目录段
-- 包装层入口的“位置参数就是 URL”行为不要随意破坏
-- 包装层入口的批量抓取功能不要随意破坏（现在委托给 Python `--batch-file`）
-- `scrape()` 的契约是抛 `SpiderError` 子类，不要改回返回 `None`
-
-## 高风险区域
-
-- `ZhihuScraper.match()` 已收紧：专栏页与问题页各自走独立的 DOM 解析分支，但两个分支的选择器都可能随站点改版失效
-- `spider.ps1` 中的 Python 路径和脚本路径是硬编码的，改动会直接影响用户日常调用（`spider.sh` 已改为自动定位）
-- `spider.py` 只是入口，新增业务逻辑时不要再把实现堆回单文件
-- 已有 `pytest` 测试（46 个用例），但全部是离线 mock；改 selector 或输出格式时仍需警惕真实站点回归
-- 爬取失败现在抛异常（`NetworkError` / `ParseError` / `UnsupportedURLError`），调用方必须捕获 `SpiderError`，不要靠返回 `None` 判断
-
-## 常见任务怎么做
-
-### 新增站点
-
-- 在 `spider_core/scrapers/` 中新增一个 `AbstractScraper` 子类
-- 保持 `scrape()` 返回 `ScrapedArticle`
-- 注册到 `spider_core/scrapers/__init__.py` 里的 `SCRAPERS`
-- 如果该站点图片使用特殊属性，补 `spider_core/media.py`
-
-### 调整输出目录逻辑
-
-- 先检查 `spider_core/config.py` 中的 `BASES`
-- 再检查 `ALIASES`
-- 再检查 `resolve_default_output_dir()` 与 `normalize_output_path()`
-- 最后检查 `spider_core/cli.py` 中 `-df` / `-f` 的互斥逻辑
-- 若目录结构变化，务必同步更新 `spider.ps1` 的帮助文本和两个文档
-
-### 调整命令行参数
-
-- Python CLI 改动后，先检查 `spider_core/cli.py`
-- 然后检查 `spider.py`、`spider.sh` 与 `spider.ps1` 是否还在正确传参
-- 特别关注：
-  - `-u/--url`
-  - `-B/--batch-file`
-  - `-df/--default-folder`
-  - `-f/--full-path`
-  - `-o/--format`
-  - `--dry-run`
-
-## 建议的最小验证
-
-如果本次修改不涉及联网逻辑，至少做这些检查：
+## 验证
 
 ```powershell
+python -m unittest discover -s tests -v    # 当前 99 个用例
 python .\spider.py --help
 python .\spider.py --list-bases
-python .\spider.py --list-aliases
-python .\spider.py --dry-run -df A -df Demo -o md
-python .\spider.py --dry-run -f "F:\workspace3\wen\temp\articles" -o md
-python -m pytest tests/ -q
+python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx" -d A/IoT -F both
+.\spider.ps1 --version
 ```
-
-Linux 上对应为：
 
 ```bash
-SPIDER_BASE=/path/to/kb python3 spider.py --dry-run -df A -df Demo -o md
-python3 -m pytest tests/ -q
+./spider.sh --version
 ```
 
-如果改了 `spider.sh` / `spider.ps1`，再补一次：
+改了选择器 / 渲染 / 图片逻辑时，必须做一次真实抓取（`-o tmp_out\... -F both`），并确认产物 html 中没有 `visibility`/`opacity`、图片为本地 `images/` 路径。
 
-```bash
-bash spider.sh --help
-```
+## 代码偏好
 
-```powershell
-. .\spider.ps1
-spider -Help
-```
-
-如果改了站点选择器或图片逻辑，最好再做一次真实 URL 抓取验证。
-
-## 写代码时的偏好
-
-- 优先保持当前脚本风格，先做小而准的修改
-- 不要在没有说明的情况下把仓库改造成大型框架
-- 若要引入配置文件、依赖管理或测试框架，可以做，但要解释迁移收益
-- 若发现 `CLUADE.md` 是有意命名，就保持它；若用户后续希望对齐社区习惯，再改名为 `CLAUDE.md`
-
-## 交付前检查
-
-- 代码行为与文档一致
-- `AGENT.md` 与本文件没有互相矛盾
-- 若新增站点、参数或路径规则，两个文档都已同步
+- 保持当前模块划分，优先小而准的修改，不要把逻辑堆回 `spider.py`。
+- 新增行为先补测试（`tests/`，标准库 unittest），再改实现。
+- 不引入新依赖，除非明确解释收益并更新 `requirements.txt`。
