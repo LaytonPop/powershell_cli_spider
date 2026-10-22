@@ -1,0 +1,19 @@
+# spider 配置文件
+#
+# 查找顺序：--config 参数 → SPIDER_CONFIG 环境变量 → 本文件（仓库根目录）
+#            → ~/.config/spider/spider.config.toml
+# 修改后可用 `spider --list-bases` 检查路径是否有效。
+
+default_base = "default"      # 默认使用哪个知识库根（[bases] 里的键名）
+default_inbox = "000-inbox"   # 不给 -d/-o 时文章落到这里（相对知识库根，可多级）
+
+[bases]
+# 知识库根目录预设，可用 --base 切换
+default = "D:\\workSpace\\wen\\Repository\\obsidianDB"
+# work = "D:\\workSpace\\wen\\work-vault"
+
+[aliases]
+# -d A/IoT 会把 A 展开成 001-Current_Projects，最终输出到 <知识库根>/001-Current_Projects/IoT
+A = "001-Current_Projects"
+B = "002-raw_resource"
+C = "003-wiki_schema"

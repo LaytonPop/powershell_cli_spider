@@ -1,58 +1,104 @@
+"""媒体下载测试：魔数扩展名、懒加载图片解析与 src 本地化。"""
+
 from __future__ import annotations
 
-from spider_core.media import _guess_extension, _resolve_url, _sniff_extension
+import hashlib
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-class TestSniffExtension:
-    def test_png(self):
-        assert _sniff_extension(b"\x89PNG\r\n\x1a\nrest") == ".png"
+from spider_core.errors import NetworkError  # noqa: E402
+from spider_core.media import (  # noqa: E402
+    _guess_extension,
+    _sniff_extension,
+    download_and_rewrite_images,
+)
 
-    def test_jpeg(self):
-        assert _sniff_extension(b"\xff\xd8\xff\xe0rest") == ".jpg"
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+JPG = b"\xff\xd8\xff" + b"0" * 16
+GIF = b"GIF89a" + b"0" * 16
+WEBP = b"RIFF" + b"\x00" * 4 + b"WEBP" + b"0" * 16
 
-    def test_gif(self):
-        assert _sniff_extension(b"GIF89a rest") == ".gif"
-
-    def test_webp(self):
-        assert _sniff_extension(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == ".webp"
-
-    def test_unknown(self):
-        assert _sniff_extension(b"not an image") is None
+BASE_URL = "https://mp.weixin.qq.com/s/abc"
 
 
 class FakeResponse:
-    def __init__(self, content=b"", headers=None):
+    def __init__(self, content: bytes, content_type: str = "image/png"):
         self.content = content
-        self.headers = headers or {}
+        self.headers = {"Content-Type": content_type}
 
 
-class TestGuessExtension:
-    def test_magic_bytes_beat_url(self):
-        resp = FakeResponse(content=b"\x89PNG\r\n\x1a\n")
-        assert _guess_extension("https://x.com/a.jpg", resp) == ".png"
+class SniffExtensionTests(unittest.TestCase):
+    def test_detects_common_formats(self) -> None:
+        self.assertEqual(_sniff_extension(PNG), ".png")
+        self.assertEqual(_sniff_extension(JPG), ".jpg")
+        self.assertEqual(_sniff_extension(GIF), ".gif")
+        self.assertEqual(_sniff_extension(WEBP), ".webp")
 
-    def test_url_suffix_used_when_no_magic(self):
-        resp = FakeResponse(content=b"junk")
-        assert _guess_extension("https://x.com/a.PNG", resp) == ".png"
-
-    def test_content_type_fallback(self):
-        resp = FakeResponse(content=b"junk", headers={"Content-Type": "image/gif"})
-        assert _guess_extension("https://x.com/img", resp) == ".gif"
-
-    def test_jpg_last_resort(self):
-        resp = FakeResponse(content=b"junk")
-        assert _guess_extension("https://x.com/img", resp) == ".jpg"
+    def test_returns_none_for_non_image(self) -> None:
+        self.assertIsNone(_sniff_extension(b"<!DOCTYPE html>"))
 
 
-class TestResolveUrl:
-    def test_protocol_relative(self):
-        assert _resolve_url("//cdn.example.com/a.png", "https://x.com") == "https://cdn.example.com/a.png"
+class GuessExtensionTests(unittest.TestCase):
+    def test_magic_bytes_win_over_url_extension(self) -> None:
+        self.assertEqual(_guess_extension("https://x.test/a.jpg", FakeResponse(PNG)), ".png")
 
-    def test_absolute(self):
-        assert _resolve_url("https://x.com/a.png", "https://x.com") == "https://x.com/a.png"
+    def test_falls_back_to_url_extension(self) -> None:
+        response = FakeResponse(b"??", "application/octet-stream")
+        self.assertEqual(_guess_extension("https://x.test/a.webp", response), ".webp")
 
-    def test_relative(self):
-        assert _resolve_url("/a.png", "https://x.com/p/") == "https://x.com/a.png"
+    def test_falls_back_to_content_type(self) -> None:
+        response = FakeResponse(b"??", "image/gif")
+        self.assertEqual(_guess_extension("https://x.test/image", response), ".gif")
 
-    def test_data_uri(self):
-        assert _resolve_url("data:image/png;base64,xxx", "https://x.com") is None
+    def test_defaults_to_jpg(self) -> None:
+        response = FakeResponse(b"??", "application/octet-stream")
+        self.assertEqual(_guess_extension("https://x.test/image", response), ".jpg")
+
+
+class DownloadAndRewriteImagesTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.img_dir = Path(self._tmp.name) / "images"
+
+    def _rewrite(self, html: str, response: FakeResponse | None = None) -> str:
+        response = response or FakeResponse(PNG)
+        with mock.patch("spider_core.media.retry_request", return_value=response):
+            return download_and_rewrite_images(html, BASE_URL, str(self.img_dir))
+
+    def test_localizes_lazy_loaded_image(self) -> None:
+        result = self._rewrite('<div><img data-src="https://mmbiz.qpic.cn/a.jpg"></div>')
+
+        expected = hashlib.md5(b"https://mmbiz.qpic.cn/a.jpg").hexdigest() + ".png"
+        self.assertIn(f'src="images/{expected}"', result)
+        self.assertTrue((self.img_dir / expected).is_file())
+
+    def test_keeps_data_uri_images(self) -> None:
+        with mock.patch("spider_core.media.retry_request") as request:
+            result = download_and_rewrite_images(
+                '<img src="data:image/png;base64,AAAA">', BASE_URL, str(self.img_dir)
+            )
+        request.assert_not_called()
+        self.assertIn('src="data:image/png;base64,AAAA"', result)
+
+    def test_resolves_relative_image_url(self) -> None:
+        result = self._rewrite('<img src="/img/a.png">')
+
+        expected = hashlib.md5(b"https://mp.weixin.qq.com/img/a.png").hexdigest() + ".png"
+        self.assertIn(f'src="images/{expected}"', result)
+
+    def test_keeps_original_src_when_download_fails(self) -> None:
+        with mock.patch("spider_core.media.retry_request", side_effect=NetworkError("boom")):
+            result = download_and_rewrite_images(
+                '<img src="https://mmbiz.qpic.cn/a.jpg">', BASE_URL, str(self.img_dir)
+            )
+        self.assertIn('src="https://mmbiz.qpic.cn/a.jpg"', result)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -8,7 +8,6 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-from .config import HEADERS
 from .errors import NetworkError
 from .http import get_session, retry_request
 
@@ -22,6 +21,8 @@ CONTENT_TYPE_EXTENSIONS = {
     "image/webp": ".webp",
     "image/bmp": ".bmp",
 }
+#: 微信公众号懒加载图片常见属性，按优先级尝试
+LAZY_IMAGE_ATTRIBUTES = ("data-wxsrc", "data-src", "data-original-src", "data-lazy-src")
 DEFAULT_MAX_WORKERS = 8
 
 
@@ -38,7 +39,7 @@ def _resolve_url(src: str, base_url: str) -> str | None:
 
 
 def _sniff_extension(content: bytes) -> str | None:
-    """Detect image extension from magic bytes (more reliable than URL/Content-Type)."""
+    """按文件头魔数判断图片扩展名（比 URL 后缀更可靠）。"""
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
         return ".png"
     if content.startswith(b"\xff\xd8\xff"):
@@ -55,20 +56,20 @@ def _sniff_extension(content: bytes) -> str | None:
 
 
 def _guess_extension(abs_url: str, response) -> str:
-    """Pick an extension: magic bytes > URL suffix > Content-Type > .jpg fallback."""
+    """决定扩展名：魔数 > URL 后缀 > Content-Type > .jpg 兜底。"""
     sniffed = _sniff_extension(response.content[:16])
     if sniffed:
         return sniffed
 
-    ext = os.path.splitext(urlparse(abs_url).path)[1].lower()
-    if ext in SUPPORTED_IMAGE_EXTENSIONS:
-        return ext
+    extension = os.path.splitext(urlparse(abs_url).path)[1].lower()
+    if extension in SUPPORTED_IMAGE_EXTENSIONS:
+        return extension
 
     return CONTENT_TYPE_EXTENSIONS.get(response.headers.get("Content-Type", ""), ".jpg")
 
 
 def _download_one(abs_url: str, img_dir: str) -> str | None:
-    """Download a single image; returns the local filename or None on failure."""
+    """下载单张图片，返回本地文件名；失败返回 None。"""
     try:
         response = retry_request(abs_url, session=get_session())
     except NetworkError as error:
@@ -90,17 +91,17 @@ def download_and_rewrite_images(
     img_dir: str,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> str:
-    """Download article images (concurrently) and rewrite src to local relative paths."""
+    """并发下载文章图片，并把 ``src`` 改写为本地相对路径。"""
     soup = BeautifulSoup(html, "html.parser")
     os.makedirs(img_dir, exist_ok=True)
 
-    # Collect image jobs first so failures can't corrupt the src rewrite pass.
+    # 先收集任务，避免下载失败影响后续 src 改写
     jobs: list[tuple[object, str]] = []
     for image in soup.find_all("img"):
         if not image.get("src") or image["src"].startswith("data:"):
-            for attr in ("data-wxsrc", "data-src", "data-original-src"):
-                if image.get(attr):
-                    image["src"] = image[attr]
+            for attribute in LAZY_IMAGE_ATTRIBUTES:
+                if image.get(attribute):
+                    image["src"] = image[attribute]
                     break
 
         if not image.get("src") or image["src"].startswith("data:"):

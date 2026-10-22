@@ -15,7 +15,7 @@ def find_scraper(url: str) -> AbstractScraper | None:
 
 
 def supported_scraper_names() -> list[str]:
-    return [scraper.__class__.__name__.replace("Scraper", "") for scraper in SCRAPERS]
+    return [scraper.__class__.__name__.replace("Scraper", "").lower() for scraper in SCRAPERS]
 
 
 __all__ = [

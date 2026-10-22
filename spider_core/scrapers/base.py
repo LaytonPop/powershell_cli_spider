@@ -6,10 +6,11 @@ from ..models import ScrapedArticle
 
 
 class AbstractScraper(ABC):
-    """Base interface for all platform scrapers.
+    """所有平台抓取器的基类。
 
-    ``scrape()`` raises SpiderError subclasses (NetworkError / ParseError)
-    instead of returning None, so callers can distinguish failure modes.
+    ``scrape()`` 失败时抛 :class:`~spider_core.errors.SpiderError` 的子类
+    （``NetworkError`` / ``ParseError``），不再返回 ``None``，
+    以便调用方区分失败原因。
     """
 
     @abstractmethod

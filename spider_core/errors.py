@@ -2,16 +2,16 @@ from __future__ import annotations
 
 
 class SpiderError(Exception):
-    """Base class for all spider errors."""
+    """所有 spider 错误的基类。"""
 
 
 class NetworkError(SpiderError):
-    """Request failed after retries (timeout, connection, HTTP status)."""
+    """请求在重试后仍失败（超时、连接中断、HTTP 错误状态码）。"""
 
 
 class ParseError(SpiderError):
-    """Page fetched but content could not be extracted."""
+    """页面已抓到，但无法从 HTML 中提取正文（结构变化、验证页等）。"""
 
 
 class UnsupportedURLError(SpiderError):
-    """No scraper matched the given URL."""
+    """没有抓取器匹配该 URL。"""

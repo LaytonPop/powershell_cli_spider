@@ -10,12 +10,13 @@ from .errors import NetworkError
 
 logger = logging.getLogger(__name__)
 
-# Shared session: connection pooling across page + image downloads.
+#: 共享 Session：正文与图片下载复用连接池，避免反复建连。
 _session = requests.Session()
 _session.headers.update(HEADERS)
 
 
 def get_session() -> requests.Session:
+    """返回全局共享的 requests Session。"""
     return _session
 
 
@@ -25,9 +26,10 @@ def retry_request(
     delay: int = 2,
     session: requests.Session | None = None,
 ) -> requests.Response:
-    """Fetch a page with exponential backoff.
+    """抓取页面，失败时指数退避重试。
 
-    Raises NetworkError when all attempts fail (never returns None).
+    与旧版不同：全部重试失败后抛出 :class:`NetworkError`，不再返回 ``None``，
+    调用方可以据此区分失败原因。
     """
     http_session = session or _session
     for attempt in range(max_retries):
