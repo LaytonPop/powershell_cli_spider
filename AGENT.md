@@ -79,7 +79,7 @@ python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx"
 
 ## 平台与选择器
 
-- 微信：URL 含 `mp.weixin.qq.com`；标题 `h1.rich_media_title` / `og:title` / `var msg_title`；正文 `div.rich_media_content` 或 `#js_content`；发布时间优先页面文本，否则从 `var ct` / `var create_time` 时间戳格式化；公众号名优先 `#js_name`，否则 `nickname` JS 变量 / `og:article:author`。
+- 微信：URL 含 `mp.weixin.qq.com`；标题 `h1.rich_media_title` / `og:title` / `var msg_title`；正文 `div.rich_media_content` 或 `#js_content`；发布时间优先页面文本，否则从 `var ct` / `var create_time` 时间戳格式化；公众号名优先 `#js_name`，否则 `nickname` JS 变量 / `nick_name` 字段 / `og:article:author`。图片消息 / 分享页没有正文容器（含 `picture_page_info_list`、`share_content_page` 标记）时，用 `cgiDataNew` 里的 `content_noencode` 摘要 + `picture_page_info_list[].cdn_url` 重建正文（`wechat-image-share`）。
 - 知乎：`zhuanlan.zhihu.com`（专栏文章：标题 `h1.Post-Title`，正文 `div.Post-RichText`，时间 `.ContentItem-time` 或 `meta[itemprop=datePublished]`）或 `www.zhihu.com/question`（问题页：标题 `h1.QuestionHeader-title`，正文取首个 `div.RichContent-inner` / `div.AnswerCard` / `div.RichContent`，时间 `meta[itemprop=dateModified]`，作者 `.AuthorInfo-name`）。
 - 其他 URL 会被拒绝（"不支持的 URL 类型"）。
 
@@ -92,7 +92,7 @@ python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx"
 ## 验证方式
 
 ```powershell
-# 1. 单元测试（无网络，当前 99 个用例）
+# 1. 单元测试（无网络，当前 103 个用例）
 python -m unittest discover -s tests -v
 
 # 2. 参数解析冒烟（不抓取）

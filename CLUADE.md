@@ -24,7 +24,7 @@
 ## 验证
 
 ```powershell
-python -m unittest discover -s tests -v    # 当前 99 个用例
+python -m unittest discover -s tests -v    # 当前 103 个用例
 python .\spider.py --help
 python .\spider.py --list-bases
 python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx" -d A/IoT -F both
