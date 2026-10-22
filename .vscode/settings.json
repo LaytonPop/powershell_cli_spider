@@ -1,7 +1,11 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "vscode_custom_css.imports": [
-  "file:///F:/workspace3/cmd_utils\\VScode_scripts\\vscode-neovide-cursor-main/neovide-cursor.js"
-],
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:conda",
+            "packageManager": "ms-python.python:conda"
+        }
+    ],
 }
