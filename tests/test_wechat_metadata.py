@@ -72,6 +72,16 @@ class WeChatMetadataTests(unittest.TestCase):
         metadata = extract_metadata(soup, raw_html)
         self.assertEqual(metadata["account"], "某公众号")
 
+    def test_description_escaped_newlines_are_decoded(self) -> None:
+        raw_html = """
+        <html><head>
+        <meta property="og:description" content="第一行\\x0a第二行">
+        </head><body></body></html>
+        """
+        soup = BeautifulSoup(raw_html, "html.parser")
+        metadata = extract_metadata(soup, raw_html)
+        self.assertEqual(metadata["description"], "第一行\n第二行")
+
 
 if __name__ == "__main__":
     unittest.main()
