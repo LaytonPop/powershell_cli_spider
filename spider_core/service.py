@@ -25,13 +25,13 @@ class SaveResult:
         return not self.error and not self.skipped
 
 
-def scrape_article(url: str):
+def scrape_article(url: str, cookie: str | None = None):
     """按 URL 选择抓取器并抓取；失败时抛 SpiderError 子类。"""
     scraper = find_scraper(url)
     if scraper is None:
         supported = ", ".join(supported_scraper_names())
         raise UnsupportedURLError(f"不支持的 URL 类型（当前支持: {supported}）")
-    return scraper.scrape(url)
+    return scraper.scrape(url, cookie=cookie)
 
 
 def _unique_article_dir(
@@ -56,15 +56,19 @@ def save_article(
     output_formats: list[str] | tuple[str, ...] = ("md",),
     image_links: str = "relative",
     skip_existing: bool = False,
+    cookie: str | None = None,
 ) -> SaveResult:
-    """抓取一篇文章并写入 ``<output_dir>/<标题>/`` 目录。"""
+    """抓取一篇文章并写入 ``<output_dir>/<标题>/`` 目录。
+
+    ``cookie`` 为可选 Cookie 请求头，用于知乎等需要登录态的站点。
+    """
     formats = [str(item).lower() for item in output_formats] or ["md"]
     unknown = [item for item in formats if item not in FORMAT_EXTENSIONS]
     if unknown:
         return SaveResult(url, error=f"未知输出格式: {', '.join(unknown)}")
 
     try:
-        article = scrape_article(url)
+        article = scrape_article(url, cookie=cookie)
     except SpiderError as error:
         return SaveResult(url, error=str(error))
 

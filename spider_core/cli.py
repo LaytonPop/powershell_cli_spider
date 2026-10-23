@@ -16,7 +16,7 @@ from .config import (
 from .scrapers import find_scraper
 from .service import save_article
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 FORMAT_TARGETS: dict[str, list[str]] = {
     "md": ["md"],
@@ -31,6 +31,7 @@ EPILOG = """\
   spider "url1" "url2" -o D:\\temp\\articles -F both
   spider -b urls.txt -d B -F md -n
   spider --dry-run "https://mp.weixin.qq.com/s/xxx"
+  spider "https://zhuanlan.zhihu.com/p/xxx" --cookie "z_c0=...; d_c0=..." -o D:\\note
   spider --list-bases / --list-aliases
 """
 
@@ -92,6 +93,18 @@ def build_parser() -> argparse.ArgumentParser:
     behavior_group.add_argument("-q", "--quiet", action="store_true", help="只输出必要信息")
     behavior_group.add_argument("-v", "--verbose", action="store_true", help="输出更多细节")
 
+    auth_group = parser.add_argument_group("登录态（可选；知乎等站点 403 时需要浏览器 Cookie）")
+    auth_group.add_argument(
+        "--cookie",
+        metavar="HEADER",
+        help='浏览器里复制的 Cookie 文本，如 "z_c0=...; d_c0=..."；也可用环境变量 SPIDER_COOKIE',
+    )
+    auth_group.add_argument(
+        "--cookie-file",
+        metavar="FILE",
+        help="Cookie 文件：浏览器复制的 Cookie 文本，或扩展导出的 Netscape cookies.txt",
+    )
+
     parser.add_argument("--config", metavar="FILE", help="指定配置文件路径（默认 spider.config.toml）")
     parser.add_argument("--list-bases", action="store_true", help="列出知识库根预设")
     parser.add_argument("--list-aliases", action="store_true", help="列出目录别名")
@@ -138,6 +151,77 @@ def read_batch_urls(batch_file: str) -> list[str]:
             if stripped and not stripped.startswith("#"):
                 urls.append(stripped)
     return urls
+
+
+def normalize_cookie_header(raw: str) -> str:
+    """把浏览器复制的 Cookie 文本整理成单行请求头。
+
+    兼容：带 ``Cookie:`` 前缀、跨多行粘贴、多余分号/空白；重复键只保留第一次。
+    """
+    text = raw.strip()
+    if text.lower().startswith("cookie:"):
+        text = text.split(":", 1)[1]
+    pairs: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        for part in line.split(";"):
+            pair = part.strip()
+            if not pair or "=" not in pair:
+                continue
+            name = pair.split("=", 1)[0].strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            pairs.append(pair)
+    return "; ".join(pairs)
+
+
+def load_cookie_file(path: str) -> str:
+    """读取 Cookie 文件。
+
+    既支持浏览器里直接复制的 ``name=value; name2=value2`` 文本，
+    也支持浏览器扩展导出的 Netscape ``cookies.txt`` 制表符格式。
+    """
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as file:
+        text = file.read()
+
+    if "\t" in text:
+        pairs: list[str] = []
+        seen: set[str] = set()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#HttpOnly_"):
+                stripped = stripped[len("#HttpOnly_") :]
+            elif not stripped or stripped.startswith("#"):
+                continue
+            fields = stripped.split("\t")
+            if len(fields) >= 7 and fields[5]:
+                name = fields[5].strip()
+                if name in seen:
+                    continue
+                seen.add(name)
+                pairs.append(f"{name}={fields[6]}")
+        if pairs:
+            return "; ".join(pairs)
+    return normalize_cookie_header(text)
+
+
+#: 环境变量：与 --cookie 等价，方便把 Cookie 放进 shell profile 而不出现在命令历史里。
+COOKIE_ENV = "SPIDER_COOKIE"
+
+
+def resolve_cookie(args: argparse.Namespace, parser: argparse.ArgumentParser) -> str:
+    """合并 ``--cookie`` / ``--cookie-file`` / ``SPIDER_COOKIE`` 三种来源。"""
+    if args.cookie and args.cookie_file:
+        parser.error("--cookie 与 --cookie-file 只能二选一")
+    raw = args.cookie or ""
+    if args.cookie_file:
+        try:
+            raw = load_cookie_file(args.cookie_file)
+        except OSError as error:
+            parser.error(f"读取 Cookie 文件失败: {error}")
+    raw = raw or os.environ.get(COOKIE_ENV, "")
+    return normalize_cookie_header(raw)
 
 
 def looks_like_format_name(value: str) -> bool:
@@ -191,6 +275,7 @@ def print_dry_run(
     output_dir: Path,
     output_formats: list[str],
     base_problem: str,
+    cookie: str = "",
 ) -> None:
     mode = "直接目录" if args.out else "知识库"
     print(f"配置文件: {config.config_path}")
@@ -201,6 +286,7 @@ def print_dry_run(
     print(f"输出格式: {' + '.join(output_formats)}")
     print(f"图片链接: {args.image_links}")
     print(f"跳过已有: {'是' if args.skip_existing else '否'}")
+    print(f"Cookie:   {'已加载 (' + str(len(cookie)) + ' 字符)' if cookie else '未设置'}")
     print(f"URL 数量: {len(urls)}")
     for index, url in enumerate(urls, 1):
         scraper = find_scraper(url)
@@ -237,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "`-o/--out` 现在表示输出目录；输出格式请改用 -F/--format，例如: spider URL -F md"
         )
+    cookie = resolve_cookie(args, parser)
 
     try:
         config = load_config(args.config)
@@ -271,12 +358,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.dry_run:
-        print_dry_run(args, config, urls, output_dir, output_formats, base_problem)
+        print_dry_run(args, config, urls, output_dir, output_formats, base_problem, cookie)
         return 0
 
     if not args.quiet:
         print(f"输出目录: {output_dir}")
         print(f"输出格式: {' + '.join(output_formats)}")
+        if cookie:
+            print(f"Cookie:   已加载 ({len(cookie)} 字符，不回显)")
     os.makedirs(output_dir, exist_ok=True)
 
     saved = skipped = failed = 0
@@ -290,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
             output_formats,
             image_links=args.image_links,
             skip_existing=args.skip_existing,
+            cookie=cookie,
         )
         if result.error:
             failed += 1

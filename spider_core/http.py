@@ -25,16 +25,21 @@ def retry_request(
     max_retries: int = 3,
     delay: int = 2,
     session: requests.Session | None = None,
+    cookie: str | None = None,
 ) -> requests.Response:
     """抓取页面，失败时指数退避重试。
 
     与旧版不同：全部重试失败后抛出 :class:`NetworkError`，不再返回 ``None``，
     调用方可以据此区分失败原因。
+
+    ``cookie`` 是要附加的 Cookie 请求头原文，用于知乎等需要登录态的站点；
+    为 ``None`` 或空串时不发送 Cookie。
     """
     http_session = session or _session
+    headers = {"Cookie": cookie} if cookie else None
     for attempt in range(max_retries):
         try:
-            response = http_session.get(url, timeout=15)
+            response = http_session.get(url, timeout=15, headers=headers)
             response.raise_for_status()
             return response
         except requests.exceptions.RequestException as error:

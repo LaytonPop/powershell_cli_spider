@@ -18,5 +18,6 @@ class AbstractScraper(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def scrape(self, url: str) -> ScrapedArticle:
+    def scrape(self, url: str, cookie: str | None = None) -> ScrapedArticle:
+        """抓取一篇文章；``cookie`` 为可选 Cookie 请求头，用于需要登录态的站点。"""
         raise NotImplementedError

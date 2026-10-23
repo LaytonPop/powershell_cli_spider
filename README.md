@@ -74,6 +74,8 @@ spider URL [URL ...] [选项]
 | `--dry-run` | 只打印解析结果，不抓取 |
 | `--open` | 有 html 输出时用默认浏览器打开 |
 | `-q, --quiet` / `-v, --verbose` | 减少 / 增加日志 |
+| `--cookie HEADER` | 登录态 Cookie（知乎 403 时用），也可用环境变量 `SPIDER_COOKIE` |
+| `--cookie-file FILE` | 从文件读取 Cookie：浏览器复制的文本或 Netscape `cookies.txt` |
 | `--config FILE` | 指定配置文件 |
 | `--list-bases` / `--list-aliases` | 列出知识库预设 / 目录别名 |
 | `--version` | 版本号 |
@@ -162,7 +164,21 @@ scraped_at: "..."
 页面上没有 `rich_media_content` 正文容器，只有摘要和图片列表；当前版本会按「摘要 + 图片」重建可读正文，并把图片下载到 `images/`。若页面只显示"使用完整服务 / 请在微信中打开"，说明正文需要微信客户端，请换一个链接。
 
 **知乎返回 403？**
-知乎有独立反爬策略，当前版本不做 Cookie/登录态，可能抓取失败，请改用其他来源。
+知乎有独立反爬策略，直接请求（含无头浏览器）通常返回 403，需要带上浏览器里已登录的 Cookie。做法：在浏览器打开任意知乎页面 → F12 → Network → 随便点一个知乎请求 → 复制请求头里的 `Cookie:` 整行，然后：
+
+```powershell
+# 直接传 Cookie 文本（注意整体用引号包住）
+python .\spider.py "https://zhuanlan.zhihu.com/p/xxxx" -o D:\note --cookie "z_c0=...; d_c0=...; __zse_ck=..."
+
+# 或先存文件再 --cookie-file（支持浏览器导出的 Netscape cookies.txt）
+python .\spider.py "https://zhuanlan.zhihu.com/p/xxxx" -o D:\note --cookie-file cookie.txt
+
+# 或放进环境变量，避免出现在命令历史里
+$env:SPIDER_COOKIE = "z_c0=...; d_c0=..."
+python .\spider.py "https://zhuanlan.zhihu.com/p/xxxx" -o D:\note
+```
+
+Cookie 会过期：`__zse_ck` 等签名项失效后重新复制即可。另外 `--dry-run` 只显示“Cookie: 已加载 (N 字符)”，不会回显内容。
 
 **提示"知识库目录不存在"？**
 默认配置指向 `D:\workSpace\wen\Repository\obsidianDB`。换机器或换路径时修改 `spider.config.toml` 的 `[bases].default`，或改用 `-o`。
@@ -176,7 +192,7 @@ scraped_at: "..."
 ## 开发与测试
 
 ```powershell
-# 单元测试（不需要网络，当前 103 个用例）
+# 单元测试（不需要网络，当前 113 个用例）
 python -m unittest discover -s tests -v
 
 # 只解析不抓取

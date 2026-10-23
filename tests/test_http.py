@@ -71,6 +71,30 @@ class RetryRequestTests(unittest.TestCase):
                 retry_request("https://example.test/a", max_retries=2, session=session)
 
 
+class CookieForwardingTests(unittest.TestCase):
+    def test_cookie_header_is_forwarded(self) -> None:
+        session = mock.Mock()
+        session.get.return_value = FakeResponse()
+
+        retry_request(
+            "https://zhuanlan.zhihu.com/p/1",
+            session=session,
+            cookie="z_c0=abc; d_c0=xyz",
+        )
+
+        _, kwargs = session.get.call_args
+        self.assertEqual(kwargs["headers"], {"Cookie": "z_c0=abc; d_c0=xyz"})
+
+    def test_no_cookie_sends_no_cookie_header(self) -> None:
+        session = mock.Mock()
+        session.get.return_value = FakeResponse()
+
+        retry_request("https://example.test/a", session=session)
+
+        _, kwargs = session.get.call_args
+        self.assertIsNone(kwargs["headers"])
+
+
 class SessionTests(unittest.TestCase):
     def test_session_is_shared_and_sends_user_agent(self) -> None:
         self.assertIs(get_session(), get_session())

@@ -12,7 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from spider_core.cli import build_parser, main  # noqa: E402
+from spider_core.cli import (  # noqa: E402
+    build_parser,
+    load_cookie_file,
+    main,
+    normalize_cookie_header,
+    resolve_cookie,
+)
 from spider_core.config import ConfigError, load_config  # noqa: E402
 
 URL = "https://mp.weixin.qq.com/s/SSU_GOBTHxiGQGPAF0xSHg"
@@ -201,6 +207,79 @@ class VersionAndEnvTests(unittest.TestCase):
                 self.assertEqual(config.config_path, config_path)
             finally:
                 os.environ.pop("SPIDER_CONFIG", None)
+
+
+class CookieHandlingTests(unittest.TestCase):
+    def test_parser_defaults_to_no_cookie(self) -> None:
+        args = build_parser().parse_args([URL])
+        self.assertIsNone(args.cookie)
+        self.assertIsNone(args.cookie_file)
+
+    def test_accepts_cookie_and_cookie_file_flags(self) -> None:
+        args = build_parser().parse_args([URL, "--cookie", "a=1; b=2"])
+        self.assertEqual(args.cookie, "a=1; b=2")
+        args = build_parser().parse_args([URL, "--cookie-file", "cookies.txt"])
+        self.assertEqual(args.cookie_file, "cookies.txt")
+
+    def test_normalize_cookie_header(self) -> None:
+        raw = "Cookie: z_c0=abc==; d_c0=xyz; \n __zse_ck=def; z_c0=duplicated"
+        self.assertEqual(
+            normalize_cookie_header(raw),
+            "z_c0=abc==; d_c0=xyz; __zse_ck=def",
+        )
+
+    def test_load_cookie_file_plain_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "cookie.txt"
+            path.write_text("z_c0=1; d_c0=2\n", encoding="utf-8")
+            self.assertEqual(load_cookie_file(str(path)), "z_c0=1; d_c0=2")
+
+    def test_load_cookie_file_netscape_format(self) -> None:
+        content = (
+            "# Netscape HTTP Cookie File\n"
+            ".zhihu.com\tTRUE\t/\tTRUE\t0\tz_c0\tTOKEN\n"
+            ".zhihu.com\tTRUE\t/\tFALSE\t0\td_c0\tDEVICE\n"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "cookies.txt"
+            path.write_text(content, encoding="utf-8")
+            self.assertEqual(load_cookie_file(str(path)), "z_c0=TOKEN; d_c0=DEVICE")
+
+    def test_env_variable_is_used_as_fallback(self) -> None:
+        args = build_parser().parse_args([URL])
+        os.environ["SPIDER_COOKIE"] = "z_c0=from-env"
+        try:
+            self.assertEqual(resolve_cookie(args, build_parser()), "z_c0=from-env")
+        finally:
+            os.environ.pop("SPIDER_COOKIE", None)
+
+    def test_cookie_and_cookie_file_are_mutually_exclusive(self) -> None:
+        args = build_parser().parse_args([URL, "--cookie", "a=1", "--cookie-file", "c.txt"])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                resolve_cookie(args, build_parser())
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("只能二选一", stderr.getvalue())
+
+    def test_dry_run_reports_cookie_status_without_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config_path = write_config(root)
+            code, stdout, _ = run_main(
+                [
+                    "--config",
+                    str(config_path),
+                    "--dry-run",
+                    URL,
+                    "--cookie",
+                    "z_c0=secret-token",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("Cookie", stdout)
+        self.assertIn("已加载", stdout)
+        self.assertNotIn("secret-token", stdout)
 
 
 if __name__ == "__main__":

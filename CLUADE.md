@@ -19,15 +19,17 @@
 - HTML 输出必须清除 `visibility` / `opacity` / 正文根节点 `display:none`，否则会回归"打开空白"。
 - Markdown 的 YAML frontmatter 与图片本地化行为不能破坏；默认格式是 `md`，默认落点是 `000-inbox`。
 - 知识库路径只来自 `spider.config.toml`（或 `--config`/`SPIDER_CONFIG`/`SPIDER_VAULT`，旧 `SPIDER_BASE` 仅作兼容回退），不要重新硬编码盘符。
+- 登录态 Cookie 只来自 `--cookie` / `--cookie-file` / `SPIDER_COOKIE`，不得写死或提交进仓库；日志只打印长度，不回显内容。
 - 改动 CLI、输出结构或路径规则时，同步更新 `README.md`、`AGENT.md` 与本文件。
 
 ## 验证
 
 ```powershell
-python -m unittest discover -s tests -v    # 当前 103 个用例
+python -m unittest discover -s tests -v    # 当前 113 个用例
 python .\spider.py --help
 python .\spider.py --list-bases
 python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx" -d A/IoT -F both
+python .\spider.py --dry-run "https://zhuanlan.zhihu.com/p/xxx" --cookie "z_c0=fake"
 .\spider.ps1 --version
 ```
 

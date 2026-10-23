@@ -59,12 +59,14 @@
 - `-o/--out` 是直接输出目录，`-d/--dir` 是知识库内目录段，两者互斥。
 - 目录别名 `A/B/C` 展开为 `001-Current_Projects / 002-raw_resource / 003-wiki_schema`；未知别名原样保留。
 - 旧参数（`-u/--url`、`-df`、`-f`、`--batch-file`）已移除，保留解析入口只为输出迁移提示；不要静默重新兼容。
+- Cookie 只能来自 `--cookie` / `--cookie-file` / `SPIDER_COOKIE`，不得写死在代码里；从 CLI 一路透传到 `retry_request(headers={"Cookie": ...})`，日志只显示长度、不回显内容。
 
 ## 命令行（当前事实）
 
 ```text
 spider URL [URL ...] [-b FILE] [-o DIR | -d SEG ...] [--base NAME]
        [-F md|html|both] [-L relative|wikilink] [-n] [--dry-run] [--open]
+       [--cookie HEADER | --cookie-file FILE]
        [-q|-v] [--config FILE] [--list-bases] [--list-aliases] [--version]
 ```
 
@@ -75,6 +77,7 @@ python .\spider.py "https://mp.weixin.qq.com/s/xxx" -F both -d A/IoT
 python .\spider.py "url1" "url2" -o D:\temp\articles
 python .\spider.py -b urls.txt -d B -F md -n
 python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx"
+python .\spider.py "https://zhuanlan.zhihu.com/p/xxx" -o D:\note --cookie "z_c0=...; d_c0=..."
 ```
 
 ## 平台与选择器
@@ -92,7 +95,7 @@ python .\spider.py --dry-run "https://mp.weixin.qq.com/s/xxx"
 ## 验证方式
 
 ```powershell
-# 1. 单元测试（无网络，当前 103 个用例）
+# 1. 单元测试（无网络，当前 113 个用例）
 python -m unittest discover -s tests -v
 
 # 2. 参数解析冒烟（不抓取）
@@ -130,10 +133,11 @@ python .\spider.py "https://mp.weixin.qq.com/s/SSU_GOBTHxiGQGPAF0xSHg" -o tmp_ou
 - **新增输出格式**：在 `renderers.FORMAT_EXTENSIONS`、`render_documents`、`cli.FORMAT_TARGETS` 三处同步，并补测试。
 - **HTML 又变空白**：先检查保存产物中是否残留 `visibility`/`opacity`/根节点 `display:none`，再看 `html_cleaner.clean_style` 与 `_is_content_root` 的判定是否覆盖新的容器写法。
 - **发布时间缺失**：微信先看原文页 `var ct` / `var create_time` 是否改名；知乎看 `.ContentItem-time` 是否仍存在。
+- **知乎 403**：确认 `--cookie` / `SPIDER_COOKIE` 已传入（日志会显示“Cookie: 已加载 (N 字符)”）；Cookie 过期需重新从浏览器复制；不要用 UA 伪装等方式绕过。
 
 ## 已知限制
 
-- 知乎可能返回 403（反爬），当前不做登录态 / Cookie；问题页只抓首个回答。
+- 知乎可能返回 403（反爬），需要浏览器登录态 Cookie（`--cookie` / `--cookie-file` / `SPIDER_COOKIE`）；Cookie 过期或缺失时仍会失败。问题页只抓首个回答。
 - 微信音频、视频、小程序、公众号名片在离线 HTML 中只显示占位文案。
 - 图片并发下载（默认 8 线程）无进度条；失败图片保留原始远程链接并打 warning。
 - 微信 `author` 常为空（页面本身未提供）。

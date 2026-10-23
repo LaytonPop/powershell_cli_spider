@@ -33,8 +33,8 @@ class ZhihuScraper(AbstractScraper):
     def match(self, url: str) -> bool:
         return "zhuanlan.zhihu.com" in url or self.QUESTION_URL_RE.search(url) is not None
 
-    def scrape(self, url: str) -> ScrapedArticle:
-        response = retry_request(url)
+    def scrape(self, url: str, cookie: str | None = None) -> ScrapedArticle:
+        response = retry_request(url, cookie=cookie)
         soup = BeautifulSoup(response.text, "html.parser")
 
         if self.QUESTION_URL_RE.search(url):

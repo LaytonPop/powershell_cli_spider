@@ -183,8 +183,8 @@ class WeChatScraper(AbstractScraper):
     def match(self, url: str) -> bool:
         return "mp.weixin.qq.com" in url
 
-    def scrape(self, url: str) -> ScrapedArticle:
-        response = retry_request(url)
+    def scrape(self, url: str, cookie: str | None = None) -> ScrapedArticle:
+        response = retry_request(url, cookie=cookie)
 
         raw_html = response.text
         soup = BeautifulSoup(raw_html, "html.parser")
