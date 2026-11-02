@@ -80,7 +80,31 @@ class WeChatMetadataTests(unittest.TestCase):
         """
         soup = BeautifulSoup(raw_html, "html.parser")
         metadata = extract_metadata(soup, raw_html)
-        self.assertEqual(metadata["description"], "第一行\n第二行")
+        # 摘要必须是单行：换行符会被压成空格
+        self.assertEqual(metadata["description"], "第一行 第二行")
+
+    def test_content_noencode_html_is_not_used_as_description(self) -> None:
+        """普通文章页的 content_noencode 是整篇正文的转义 HTML，不能当摘要。"""
+        raw_html = """
+        <html><body><script>
+        var msg_desc = "";
+        var content_noencode = '\\x3csection\\x3e\\x3cp\\x3e整篇正文\\x3c/p\\x3e\\x3c/section\\x3e';
+        </script></body></html>
+        """
+        soup = BeautifulSoup(raw_html, "html.parser")
+        metadata = extract_metadata(soup, raw_html)
+        self.assertEqual(metadata["description"], "")
+
+    def test_msg_desc_is_used_and_escaped_html_is_stripped(self) -> None:
+        raw_html = """
+        <html><body><script>
+        var msg_desc = "\\x3cp\\x3e真正的摘要\\x3c/p\\x3e";
+        var content_noencode = '\\x3csection\\x3e整篇正文\\x3c/section\\x3e';
+        </script></body></html>
+        """
+        soup = BeautifulSoup(raw_html, "html.parser")
+        metadata = extract_metadata(soup, raw_html)
+        self.assertEqual(metadata["description"], "真正的摘要")
 
 
 if __name__ == "__main__":

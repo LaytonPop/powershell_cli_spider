@@ -192,7 +192,7 @@ Cookie 会过期：`__zse_ck` 等签名项失效后重新复制即可。另外 `
 ## 开发与测试
 
 ```powershell
-# 单元测试（不需要网络，当前 113 个用例）
+# 单元测试（不需要网络，当前 118 个用例）
 python -m unittest discover -s tests -v
 
 # 只解析不抓取

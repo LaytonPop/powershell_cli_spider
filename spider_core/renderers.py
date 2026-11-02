@@ -156,6 +156,32 @@ def _extract_description(html_content: str, max_chars: int = 160) -> str:
     return text[:max_chars].rsplit(" ", 1)[0] + "…"
 
 
+DESCRIPTION_LIMIT = 160
+_JS_HEX_ESCAPE_PATTERN = re.compile(r"\\x([0-9A-Fa-f]{2})")
+
+
+def _normalize_description(value: str, max_chars: int = DESCRIPTION_LIMIT) -> str:
+    """摘要兜底清洗：还原 JS 转义、去掉 HTML 标签、压成单行、截断。
+
+    摘要会写进 Markdown frontmatter 和 ``<meta name="description">``，
+    必须保证它是短的单行纯文本——否则会出现单行十几万字符的坏 frontmatter。
+    """
+    if not value:
+        return ""
+    value = _JS_HEX_ESCAPE_PATTERN.sub(lambda match: chr(int(match.group(1), 16)), value)
+    if "<" in value or ">" in value:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(value, "html.parser")
+        for tag in soup.find_all(["script", "style"]):
+            tag.decompose()
+        value = soup.get_text(" ", strip=True)
+    text = re.sub(r"\s+", " ", value).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rsplit(" ", 1)[0] + "…"
+
+
 def _yaml_quote(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     escaped = escaped.replace("\r", " ").replace("\n", " ")
@@ -178,8 +204,8 @@ def build_html_doc(article: ScrapedArticle, html_content: str) -> str:
 
     title_html = escape(article.title)
     source_attr = escape(article.source_url, quote=True)
-    description = (article.description or _extract_description(cleaned)).strip()
-    description_attr = escape(" ".join(description.split()), quote=True)
+    description = _normalize_description(article.description or _extract_description(cleaned))
+    description_attr = escape(description, quote=True)
 
     meta_chunks: list[str] = []
     for label, value in (
@@ -247,7 +273,7 @@ def build_markdown_doc(
         md_body = _convert_obsidian_image_links(md_body)
 
     platform = detect_platform(article.source_url)
-    description = (article.description or _extract_description(html_content)).strip()
+    description = _normalize_description(article.description or _extract_description(html_content))
 
     lines = ["---"]
     lines.append(f"title: {_yaml_quote(article.title)}")

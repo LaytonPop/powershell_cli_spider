@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -71,6 +72,16 @@ class BuildHtmlDocTests(unittest.TestCase):
         self.assertNotIn("visibility", document)
         self.assertNotIn("opacity: 0", document)
 
+    def test_meta_description_is_short_and_single_line(self) -> None:
+        huge = "\\x3cp\\x3e" + ("很长的正文" * 5000) + "\\x3c/p\\x3e"
+        document = build_html_doc(make_article(description=huge), "<p>正文</p>")
+        match = re.search(r'<meta name="description" content="([^"]*)"', document)
+        self.assertIsNotNone(match)
+        value = match.group(1)
+        self.assertLessEqual(len(value), 220)
+        self.assertNotIn("\\x3c", value)
+        self.assertNotIn("<p>", value)
+
     def test_rendered_html_contains_metadata_and_escapes_title(self) -> None:
         document = build_html_doc(make_article(), "<div id='js_content'><p>正文</p></div>")
         self.assertIn("测试公众号", document)
@@ -118,6 +129,25 @@ class BuildMarkdownDocTests(unittest.TestCase):
         self.assertIn("![插图](images/abc.jpg)", relative)
         wikilink = build_markdown_doc(make_article(), content, image_links="wikilink")
         self.assertIn("![[images/abc.jpg]]", wikilink)
+
+    def test_huge_escaped_html_description_is_normalized(self) -> None:
+        huge = "\\x3csection\\x3e" + ("很长的正文" * 5000) + "\\x3c/section\\x3e"
+        markdown = build_markdown_doc(make_article(description=huge), "<p>正文</p>")
+
+        description_lines = [
+            line for line in markdown.splitlines() if line.startswith("description: ")
+        ]
+        self.assertEqual(len(description_lines), 1)
+        line = description_lines[0]
+        self.assertLessEqual(len(line), 220)
+        self.assertNotIn("\\x3c", line)
+        self.assertNotIn("<section>", line)
+
+    def test_html_tags_in_description_are_stripped(self) -> None:
+        markdown = build_markdown_doc(
+            make_article(description="文章 <b>摘要</b> 内容"), "<p>正文</p>"
+        )
+        self.assertIn('description: "文章 摘要 内容"', markdown)
 
 
 class RenderDocumentsTests(unittest.TestCase):

@@ -16,7 +16,7 @@ from .config import (
 from .scrapers import find_scraper
 from .service import save_article
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 FORMAT_TARGETS: dict[str, list[str]] = {
     "md": ["md"],

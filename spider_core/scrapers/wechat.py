@@ -19,6 +19,8 @@ IMAGE_SHARE_MARKERS = ("picture_page_info_list", "share_content_page")
 JS_OBJECT_STRING_PATTERN = r"\b{key}\s*:\s*'((?:[^'\\]|\\.)*)'"
 FORMATTED_TIME_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
 CDN_URL_PATTERN = re.compile(r"cdn_url:\s*'((?:[^'\\]|\\.)*)'")
+JS_HEX_ESCAPE_PATTERN = re.compile(r"\\x([0-9A-Fa-f]{2})")
+JS_UNICODE_ESCAPE_PATTERN = re.compile(r"\\u([0-9A-Fa-f]{4})")
 
 
 def _meta_content(soup: BeautifulSoup, key: str) -> str:
@@ -42,17 +44,32 @@ def _js_string_variable(raw_html: str, name: str) -> str:
     return html_lib.unescape(match.group(1)).strip()
 
 
+def _hex_escape_to_char(match: re.Match[str]) -> str:
+    return chr(int(match.group(1), 16))
+
+
 def _unescape_js_string(value: str) -> str:
-    """还原 JS 字符串里的转义，例如 ``\\x0a`` -> 换行、``\\x26amp;`` -> ``&amp;``。"""
-    value = (
-        value.replace("\\x0a", "\n")
-        .replace("\\x0d", "\r")
-        .replace("\\x26", "&")
-        .replace("\\/", "/")
-        .replace("\\'", "'")
-        .replace('\\"', '"')
-    )
+    """还原 JS 字符串里的转义，例如 ``\\x0a`` -> 换行、``\\x3c`` -> ``<``。"""
+    value = value.replace("\\/", "/").replace("\\'", "'").replace('\\"', '"')
+    value = JS_HEX_ESCAPE_PATTERN.sub(_hex_escape_to_char, value)
+    value = JS_UNICODE_ESCAPE_PATTERN.sub(_hex_escape_to_char, value)
     return html_lib.unescape(value)
+
+
+def _strip_tags_with_spaces(value: str) -> str:
+    """把 HTML 片段压成一行纯文本（用于摘要）。"""
+    text = BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _plain_description(value: str) -> str:
+    """摘要值可能是转义 HTML（如 ``\\x3csection\\x3e``），统一还原并压成单行纯文本。"""
+    if not value:
+        return ""
+    value = _unescape_js_string(value)
+    if "<" in value or ">" in value:
+        value = _strip_tags_with_spaces(value)
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _js_object_string(raw_html: str, key: str) -> str:
@@ -135,6 +152,8 @@ def _image_share_html(soup: BeautifulSoup, raw_html: str) -> str:
     description = _js_object_string(raw_html, "content_noencode") or _meta_content(
         soup, "og:description"
     )
+    if "<" in description or ">" in description:
+        description = BeautifulSoup(description, "html.parser").get_text("\n")
     image_urls = _image_share_urls(raw_html)
     if not description and not image_urls:
         return ""
@@ -164,12 +183,14 @@ def extract_metadata(soup: BeautifulSoup, raw_html: str) -> dict[str, str]:
         or _meta_content(soup, "og:article:author")
     )
     author = _js_string_variable(raw_html, "author") or _meta_content(soup, "author")
+    # 只取真正的“摘要”字段：og:description / description / msg_desc。
+    # 不能用 content_noencode —— 普通文章页里它是整篇正文的转义 HTML（可达十几万字符）。
     description = (
         _meta_content(soup, "og:description")
         or _meta_content(soup, "description")
-        or _js_object_string(raw_html, "content_noencode")
+        or _js_string_variable(raw_html, "msg_desc")
     )
-    description = _unescape_js_string(description)
+    description = _plain_description(description)
 
     return {
         "publish_time": publish_time,

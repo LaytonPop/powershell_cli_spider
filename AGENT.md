@@ -60,6 +60,7 @@
 - 目录别名 `A/B/C` 展开为 `001-Current_Projects / 002-raw_resource / 003-wiki_schema`；未知别名原样保留。
 - 旧参数（`-u/--url`、`-df`、`-f`、`--batch-file`）已移除，保留解析入口只为输出迁移提示；不要静默重新兼容。
 - Cookie 只能来自 `--cookie` / `--cookie-file` / `SPIDER_COOKIE`，不得写死在代码里；从 CLI 一路透传到 `retry_request(headers={"Cookie": ...})`，日志只显示长度、不回显内容。
+- `description` 必须是短的单行纯文本（≤160 字符，渲染层会再兜底清洗与截断）；不要把微信的 `content_noencode`（普通文章页里是整篇正文的转义 HTML）当摘要，否则 frontmatter 会出现十几万字符的单行。
 
 ## 命令行（当前事实）
 
@@ -95,7 +96,7 @@ python .\spider.py "https://zhuanlan.zhihu.com/p/xxx" -o D:\note --cookie "z_c0=
 ## 验证方式
 
 ```powershell
-# 1. 单元测试（无网络，当前 113 个用例）
+# 1. 单元测试（无网络，当前 118 个用例）
 python -m unittest discover -s tests -v
 
 # 2. 参数解析冒烟（不抓取）
